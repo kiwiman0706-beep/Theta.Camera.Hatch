@@ -63,7 +63,7 @@ jobs:
           cp app/build/outputs/apk/release/app-release.apk "$APK"
           (cd dist && sha256sum *.apk > SHA256SUMS.txt)
           # パッケージ名・版・署名がシリーズ共通の鍵かを確かめる
-          curl -sSfL -o check_apk.py https://raw.githubusercontent.com/kiwiman0706-beep/Theta.Hatch.Series/main/tools/check_apk.py
+          curl -sSfL -o check_apk.py https://raw.githubusercontent.com/kiwiman0706-beep/Theta.Hatch.Series/HEAD/tools/check_apk.py
           python3 check_apk.py "$APK" | tee check.txt
           grep -q "app.thetahatch.camera ${{ steps.ver.outputs.version }}" check.txt
           grep -q "共通" check.txt || { echo "::error::共通鍵で署名されていません"; exit 1; }
