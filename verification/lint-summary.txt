@@ -1,0 +1,142 @@
+app/build.gradle.kts:7: Warning: Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the android.os.Build.VERSION_CODES javadoc for details. [OldTargetApi]
+    defaultConfig { applicationId = "com.theta.camera.hatch"; minSdk = 29; targetSdk = 35; versionCode = 1; versionName = "0.1.0" }
+                                                                           ~~~~~~~~~~~~~~
+
+   Explanation for issues of type "OldTargetApi":
+   When your application or sdk runs on a version of Android that is more
+   recent than your targetSdkVersion specifies that it has been tested with,
+   various compatibility modes kick in. This ensures that your application
+   continues to work, but it may look out of place. For example, if the
+   targetSdkVersion is less than 14, your app may get an option button in the
+   UI.
+
+   To fix this issue, set the targetSdkVersion to the highest available value.
+   Then test your app to make sure everything works correctly. You may want to
+   consult the compatibility notes to see what changes apply to each version
+   you are adding support for:
+   https://developer.android.com/reference/android/os/Build.VERSION_CODES.html
+   as well as follow this guide:
+   https://developer.android.com/distribute/best-practices/develop/target-sdk.
+   html
+
+   https://developer.android.com/distribute/best-practices/develop/target-sdk.html
+
+app/src/main/AndroidManifest.xml:6: Warning: The attribute android:allowBackup is deprecated from Android 12 and higher and may be removed in future versions. Consider adding the attribute android:dataExtractionRules specifying an @xml resource which configures cloud backups and device transfers on Android 12 and higher. [DataExtractionRules]
+    <application android:theme="@style/AppTheme" android:label="Theta Camera" android:icon="@drawable/ic_launcher" android:allowBackup="false" android:supportsRtl="true">
+                                                                                                                                        ~~~~~
+
+   Explanation for issues of type "DataExtractionRules":
+   Before Android 12, the attributes android:allowBackup and
+   android:fullBackupContent were used to configure all forms of backup,
+   including cloud backups, device-to-device transfers and adb backup.
+
+   In Android 12 and higher, these attributes have been deprecated and will
+   only apply to cloud backups. You should instead use the attribute
+   android:dataExtractionRules, specifying an @xml resource that configures
+   which files to back up, for cloud backups and for device-to-device
+   transfers, separately. If your minSdkVersion supports older versions,
+   you'll still want to specify an android:fullBackupContent resource if the
+   default behavior is not right for your app.
+
+   https://developer.android.com/about/versions/12/backup-restore#xml-changes
+   https://goo.gle/DataExtractionRules
+
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:183: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        controlColumn.addView(scrollRow(button("写真") { video=false; bindCamera() },button("動画") { video=true; bindCamera() },modeButton,button("フラッシュ") { showFlash() },button("タイマー") { choose("セルフタイマー",listOf("なし","3秒","5秒","10秒")) { timerSeconds=listOf(0,3,5,10)[it]; prefs.edit().putInt("timer",timerSeconds).apply(); refreshInfo() } },button("PRO") { showPro() }))
+                                                                                                                                                                                                                                                                             ~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:188: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+        bottom.addView(button("グリッド",false) { overlay.grid=!overlay.grid; prefs.edit().putBoolean("grid",overlay.grid).apply(); overlay.invalidate() },LinearLayout.LayoutParams(0,dp(62),1f))
+                                                                          ~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:372: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+    private fun saveLast(uri:Uri?,isVideo:Boolean) { if(uri==null || uri==Uri.EMPTY) return; lastUri=uri; lastVideo=isVideo; prefs.edit().putString("lastUri",uri.toString()).putBoolean("lastVideo",isVideo).apply() }
+                                                                                                                             ~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:399: Warning: Use the KTX extension function SharedPreferences.edit instead? [UseKtx]
+            5->{audioEnabled=!audioEnabled;prefs.edit().putBoolean("audio",audioEnabled).apply()}
+                                           ~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:617: Warning: Use the KTX extension function Canvas.withRotation instead? [UseKtx]
+        if(level){val correction=((roll+45f)%90f+90f)%90f-45f;paint.color=if(abs(correction)<2)Color.rgb(142,226,181) else Color.WHITE;c.save();c.rotate(-correction,width/2f,height/2f);c.drawLine(width*.35f,height/2f,width*.65f,height/2f,paint);c.restore()}
+                                                                                                                                       ~~~~~~~~
+
+   Explanation for issues of type "UseKtx":
+   The Android KTX libraries decorates the Android platform SDK as well as
+   various libraries with more convenient extension functions available from
+   Kotlin, allowing you to use default parameters, named parameters, and
+   more.
+
+   Available options:
+
+   **remove-defaults** (default is true):
+   Whether to skip arguments that match the defaults provided by the extension.
+
+   Extensions often provide default values for some of the parameters. For example:
+   ```kotlin
+   fun Path.readLines(charset: Charset = Charsets.UTF_8): List<String> { return Files.readAllLines(this, charset) }
+   ```
+   This lint check will by default automatically omit parameters that match the default, so if your code was calling
+
+   ```kotlin
+   Files.readAllLines(file, Charset.UTF_8)
+   ```
+   lint would replace this with
+   ```kotlin
+   file.readLines()
+   ```
+   rather than
+
+   ```kotlin
+   file.readLines(Charset.UTF_8
+   ```
+   You can turn this behavior off using this option.
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UseKtx">
+           <option name="remove-defaults" value="true" />
+       </issue>
+   </lint>
+   ```
+
+   **require-present** (default is true):
+   Whether to only offer extensions already available.
+
+   This option lets you only have lint suggest extension replacements if those extensions are already available on the class path (in other words, you're already depending on the library containing the extension method.)
+
+   To configure this option, use a `lint.xml` file with an <option> like this:
+
+   ```xml
+   <lint>
+       <issue id="UseKtx">
+           <option name="require-present" value="true" />
+       </issue>
+   </lint>
+   ```
+
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:294: Warning: Do not concatenate text displayed with setText. Use resource string with placeholders. [SetTextI18n]
+        detail.text="${String.format(Locale.US,"%.1f×",z)}  ·  ${res?.let { "${it.width}×${it.height}" } ?: "画角はプレビューで確認"}  ·  ${if(timerSeconds==0) "タイマーなし" else "${timerSeconds}秒"}"
+                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:314: Warning: Do not concatenate text displayed with setText. Use resource string with placeholders. [SetTextI18n]
+                override fun onTick(ms:Long){status.text="${ceil(ms/1000.0).toInt()} 秒後に撮影"}
+                                                         ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:361: Warning: Do not concatenate text displayed with setText. Use resource string with placeholders. [SetTextI18n]
+                    is VideoRecordEvent.Status -> { val sec=event.recordingStats.recordedDurationNanos/1_000_000_000; status.text="● 録画 ${sec/60}:${(sec%60).toString().padStart(2,'0')} ${if(withAudio) "音声あり" else "無音"}" }
+                                                                                                                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+app/src/main/java/com/theta/camera/hatch/MainActivity.kt:361: Warning: Number formatting does not take into account locale settings. Consider using String.format instead. [SetTextI18n]
+                    is VideoRecordEvent.Status -> { val sec=event.recordingStats.recordedDurationNanos/1_000_000_000; status.text="● 録画 ${sec/60}:${(sec%60).toString().padStart(2,'0')} ${if(withAudio) "音声あり" else "無音"}" }
+                                                                                                                                                    ~~~~~~~~~~~~~~~~~~~
+
+   Explanation for issues of type "SetTextI18n":
+   When calling TextView#setText
+   * Never call Number#toString() to format numbers; it will not handle
+   fraction separators and locale-specific digits properly. Consider using
+   String#format with proper format specifications (%d or %f) instead.
+   * Do not pass a string literal (e.g. "Hello") to display text. Hardcoded
+   text can not be properly translated to other languages. Consider using
+   Android resource strings instead.
+   * Do not build messages by concatenating text chunks. Such messages can not
+   be properly translated.
+
+   https://developer.android.com/guide/topics/resources/localization.html
+
+0 errors, 11 warnings

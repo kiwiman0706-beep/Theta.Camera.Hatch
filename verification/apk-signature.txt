@@ -1,0 +1,17 @@
+Verifies
+Verified using v1 scheme (JAR signing): false
+Verified using v2 scheme (APK Signature Scheme v2): true
+Verified using v3 scheme (APK Signature Scheme v3): false
+Verified using v3.1 scheme (APK Signature Scheme v3.1): false
+Verified using v4 scheme (APK Signature Scheme v4): false
+Verified for SourceStamp: false
+Number of signers: 1
+Signer #1 certificate DN: CN=Theta Camera Personal, O=Theta Hatch, C=JP
+Signer #1 certificate SHA-256 digest: ae9482c814538043aba5e090c12e14948933e5eba7f99d2dcf695e8474487c38
+Signer #1 certificate SHA-1 digest: c9f416ec362f35f85d8f542ba0e0be70bf04e327
+Signer #1 certificate MD5 digest: 13b72eec6021319a7a9174a419ed2a35
+Signer #1 key algorithm: RSA
+Signer #1 key size (bits): 3072
+Signer #1 public key SHA-256 digest: 8b18129f7b48f5d5f22561a243ed4317bfd3feb2dce552a36957270be6468812
+Signer #1 public key SHA-1 digest: 8884070e743ea30a8982a2034070bc717fe09474
+Signer #1 public key MD5 digest: d832dc07e79a69d43b55cc288fd18b7b

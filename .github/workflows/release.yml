@@ -1,0 +1,77 @@
+name: release
+
+# 版（app/build.gradle.kts の versionName）を上げて main に push すると、
+# v<版> のタグと Release（prerelease ではない）を作り、共通鍵で署名した APK を 1 つ付ける。
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 版を読む
+        id: ver
+        run: |
+          VER=$(sed -n 's/.*versionName = "\(.*\)".*/\1/p' app/build.gradle.kts | head -1)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/v$VER" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "v$VER はもうあります。Release は作りません。"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: 単体テスト
+        run: ./gradlew --no-daemon testReleaseUnitTest
+
+      - name: 共通鍵を用意
+        if: steps.ver.outputs.exists == 'false'
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$KS_B64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_B64 がありません。Theta.Hatch.Series の tools/sync-secrets で配ってください。"
+            exit 1
+          fi
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/thetahatch.jks"
+          echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/thetahatch.jks" >> "$GITHUB_ENV"
+
+      - name: APK を作る
+        if: steps.ver.outputs.exists == 'false'
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          mkdir -p dist
+          APK="dist/ThetaCameraHatch-${{ steps.ver.outputs.version }}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+          # パッケージ名・版・署名がシリーズ共通の鍵かを確かめる
+          curl -sSfL -o check_apk.py https://raw.githubusercontent.com/kiwiman0706-beep/Theta.Hatch.Series/main/tools/check_apk.py
+          python3 check_apk.py "$APK" | tee check.txt
+          grep -q "app.thetahatch.camera ${{ steps.ver.outputs.version }}" check.txt
+          grep -q "共通" check.txt || { echo "::error::共通鍵で署名されていません"; exit 1; }
+
+      - name: Release を作る
+        if: steps.ver.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=${{ steps.ver.outputs.version }}
+          gh release create "v$V" dist/* --title "Theta Camera Hatch $V" --notes "Theta Camera Hatch $V" --target "$GITHUB_SHA"
