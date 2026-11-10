@@ -58,7 +58,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var facing = CameraSelector.LENS_FACING_BACK
     private var extensionMode = ExtensionMode.NONE
     private var highResolution = false
-    private var wideAspect = false
+    private var aspect = "3:4"   // 3:4・9:16・1:1・フル（見えている範囲がそのまま保存される）
+    private lateinit var stage: FrameLayout
+    private lateinit var aspectChip: TextView
+    private var flexHingeTop = -1   // 半分折った Flex モードのとき、折り目の上端（px）
+    private var burstActive = false
+    private var burstCount = 0
+    private var burstBase = ""
     private var ultraHdr = false
     private var rawJpeg = false
     private var flash = ImageCapture.FLASH_MODE_OFF
@@ -146,6 +152,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         autoRear = prefs.getBoolean("autoRear", true)
         highResolution = prefs.getBoolean("highResolution", false)
+        aspect = prefs.getString("aspect", "3:4") ?: "3:4"
         timerSeconds = prefs.getInt("timer", 0)
         audioEnabled = prefs.getBoolean("audio", true)
         lastUri = prefs.getString("lastUri", null)?.let(Uri::parse)
@@ -193,9 +200,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
     private fun buildUi() {
         root=FrameLayout(this).apply { setBackgroundColor(C_BG) }
-        preview=PreviewView(this).apply { implementationMode=PreviewView.ImplementationMode.COMPATIBLE; scaleType=PreviewView.ScaleType.FIT_CENTER; setBackgroundColor(C_BG) }
+        preview=PreviewView(this).apply { implementationMode=PreviewView.ImplementationMode.COMPATIBLE; scaleType=PreviewView.ScaleType.FILL_CENTER; setBackgroundColor(C_BG) }
         overlay=GuideView(this).apply { grid=prefs.getBoolean("grid",false); level=prefs.getBoolean("level",false) }
-        root.addView(preview,FrameLayout.LayoutParams(-1,-1)); root.addView(overlay,FrameLayout.LayoutParams(-1,-1))
+        stage=FrameLayout(this)
+        stage.addView(preview,FrameLayout.LayoutParams(-1,-1)); stage.addView(overlay,FrameLayout.LayoutParams(-1,-1))
+        root.addView(stage,FrameLayout.LayoutParams(-1,-1,Gravity.CENTER))
+        root.addOnLayoutChangeListener { _,l,t,r,b,ol,ot,or2,ob -> if(r-l!=or2-ol || b-t!=ob-ot) layoutStage() }
         ui=FrameLayout(this); root.addView(ui,FrameLayout.LayoutParams(-1,-1))
         ui.setOnApplyWindowInsetsListener { v,ins ->
             val b=androidx.core.view.WindowInsetsCompat.toWindowInsetsCompat(ins).getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
@@ -209,10 +219,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         gridChip=chip("グリッド") { overlay.grid=!overlay.grid; prefs.edit().putBoolean("grid",overlay.grid).apply(); overlay.invalidate(); refreshInfo() }
         modeChip=chip("") { showModes() }
         qualityChip=chip("") { showVideoSettings() }
+        aspectChip=chip("") { chooseAspect() }
         fpsChip=chip("") { if(recording!=null) { message("録画中は変更できません"); return@chip }; sixtyFps=!sixtyFps; bindCamera(); refreshInfo() }
         hudRows=vcol(Gravity.START,
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(flashChip,timerChip,evChip,levelChip,gridChip)) },
-            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(modeChip,qualityChip,fpsChip)) })
+            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(modeChip,aspectChip,qualityChip,fpsChip)) })
         liveChip=chip("● LIVE") {}.apply { isClickable=false }
         lensInfo=shadowText("",12f,C_SUB).apply { gravity=Gravity.START; setPadding(dp(6),dp(2),dp(6),dp(2)) }
         ui.addView(vcol(Gravity.START,hudRows,liveChip,lensInfo),at(Gravity.TOP or Gravity.START,r=124))
@@ -237,7 +248,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         photoBtn=ShutterButton(this,ShutterButton.PHOTO); videoBtn=ShutterButton(this,ShutterButton.VIDEO); scanBtn=ShutterButton(this,ShutterButton.SCAN)
         val (p,_)=shutterItem(photoBtn,"写真",64) { onPhoto() }
         val (v,vl)=shutterItem(videoBtn,"動画",76) { onVideo() }; videoLabel=vl
-        val (s,_)=shutterItem(scanBtn,"スキャン",56) { startScan() }
+        val (s,_)=shutterItem(scanBtn,"スキャン",56) { onScan() }
+        photoBtn.setOnLongClickListener { startBurst(); true }
+        photoBtn.setOnTouchListener { _,e -> if(e.actionMasked==MotionEvent.ACTION_UP || e.actionMasked==MotionEvent.ACTION_CANCEL) burstActive=false; false }
         shutterBar=LinearLayout(this).apply { gravity=Gravity.CENTER; addView(p); addView(v); addView(s) }
         bottomBox=vcol(Gravity.CENTER_HORIZONTAL,evBar,zoomPill)
         ui.addView(bottomBox,at(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
@@ -312,11 +325,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 if(extensions?.isExtensionAvailable(selector,extensionMode)==true) selector=extensions!!.getExtensionEnabledCameraSelector(selector,extensionMode)
                 else { extensionMode=ExtensionMode.NONE; message("このレンズでは選択した拡張に非対応です。標準で撮影します") }
             }
-            val resolution=ResolutionSelector.Builder().setAspectRatioStrategy(if(wideAspect) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+            val ratio=if(tallAspect()) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY
+            val resolution=ResolutionSelector.Builder().setAspectRatioStrategy(ratio)
                 .setAllowedResolutionMode(if(highResolution) ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE else ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION)
                 .setResolutionStrategy(if(highResolution) ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY else ResolutionStrategy(android.util.Size(4000,3000),ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)).build()
             val pb=Preview.Builder().setTargetRotation(preview.display?.rotation ?: Surface.ROTATION_0)
-            pb.setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(if(wideAspect) AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY else AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY).build())
+            pb.setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build())
             val pv=pb.build().also { it.setSurfaceProvider(preview.surfaceProvider) }
             // 写真と動画を同時に接続（起動直後にワンタップで録画・録画中も写真）
             if(!videoOnly) {
@@ -343,12 +357,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 }
             }
             val ic=imageCapture; val vc=videoCapture
+            // 画面に見えている範囲（比率）で切り出して保存する
+            val vp=preview.viewPort
+            fun bind(vararg uc:UseCase):Camera = if(vp!=null) p.bindToLifecycle(this,selector,UseCaseGroup.Builder().setViewPort(vp).apply { uc.forEach { addUseCase(it) } }.build()) else p.bindToLifecycle(this,selector,*uc)
             camera=when {
-                ic!=null && vc!=null -> try { p.bindToLifecycle(this,selector,pv,ic,vc) } catch(e:IllegalArgumentException) {
+                ic!=null && vc!=null -> try { bind(pv,ic,vc) } catch(e:IllegalArgumentException) {
                     // 写真と動画の同時接続に非対応：写真だけで接続し、動画ボタンで動画用に接続し直す
-                    lastError="写真と動画の同時接続に非対応: ${e.message}"; videoCapture=null; p.unbindAll(); p.bindToLifecycle(this,selector,pv,ic) }
-                ic!=null -> p.bindToLifecycle(this,selector,pv,ic)
-                vc!=null -> p.bindToLifecycle(this,selector,pv,vc)
+                    lastError="写真と動画の同時接続に非対応: ${e.message}"; videoCapture=null; p.unbindAll(); bind(pv,ic) }
+                ic!=null -> bind(pv,ic)
+                vc!=null -> bind(pv,vc)
                 else -> error("接続できる撮影機能がありません")
             }
             camera?.let { c ->
@@ -388,6 +405,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         setActive(modeChip,extensionMode!=ExtensionMode.NONE||rawJpeg||ultraHdr)
         qualityChip.text=qualityName(quality)+if(videoHdr) " HDR" else ""; setActive(qualityChip,videoHdr)
         fpsChip.text=if(sixtyFps) "60 fps" else "30 fps"; setActive(fpsChip,sixtyFps)
+        aspectChip.text=aspect
         val res=imageCapture?.resolutionInfo?.resolution
         lensInfo.text="${lensName(z)} · ${String.format(Locale.US,"%.1f×",z)}${res?.let { "  ·  ${it.width}×${it.height}" } ?: ""}"
         val near=zoomChips.minByOrNull { abs(it.first-z) }?.first
@@ -511,7 +529,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             "動画設定（画質・fps・HDR・手ぶれ補正）" to { showVideoSettings() },
             "音声録音：${if(audioEnabled) "ON" else "OFF"}" to { audioEnabled=!audioEnabled; prefs.edit().putBoolean("audio",audioEnabled).apply() },
             "写真解像度：${if(highResolution) "公開される最大" else "通常"}" to { highResolution=!highResolution; prefs.edit().putBoolean("highResolution",highResolution).apply(); bindCamera() },
-            "写真比率：${if(wideAspect) "16:9" else "4:3"}" to { wideAspect=!wideAspect; bindCamera() },
+            "比率：$aspect" to { chooseAspect() },
             "Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() },
             "RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}" to { rawJpeg=!rawJpeg; if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE}; bindCamera() },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
@@ -666,6 +684,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             lifecycleScope.launch {
                 repeatOnLifecycle(Lifecycle.State.STARTED) {
                     WindowInfoTracker.getOrCreate(this@MainActivity).windowLayoutInfo(this@MainActivity).collect { info ->
+                        updateFlex(info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull())
                         if(hinge==null && rearSession==null && !rearRequested) {
                             val feature=info.displayFeatures.filterIsInstance<FoldingFeature>().firstOrNull()
                             when { feature?.state==FoldingFeature.State.FLAT -> updateAngle(180f)
@@ -768,6 +787,79 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         } }.onFailure {appendLine("Camera enumeration error: ${it.message}")}
         appendDeviceDeep(manager)
         appendLine("No photos, videos, account details, or device serial included.")
+    }
+    private fun tallAspect()=aspect=="9:16" || aspect=="フル"
+    private fun chooseAspect() {
+        if(recording!=null) { message("録画中は変更できません"); return }
+        val list=listOf("3:4","9:16","1:1","フル")
+        choose("比率（見えている範囲で保存）",list) { aspect=list[it]; prefs.edit().putString("aspect",aspect).apply(); layoutStage(force=true); refreshInfo() }
+    }
+    /** プレビューの枠を比率に合わせる。Flex モードでは折り目より上だけを使う */
+    private fun layoutStage(force:Boolean=false) {
+        if(!::stage.isInitialized) return
+        val W=root.width; val H=root.height; if(W==0 || H==0) return
+        val areaH=if(flexHingeTop>0) flexHingeTop.coerceAtMost(H) else H
+        val r=when(aspect) { "9:16" -> 9 to 16; "1:1" -> 1 to 1; "フル" -> 0 to 0; else -> 3 to 4 }
+        var w=W; var h=areaH
+        if(r.first>0) {
+            val (a,b)=if(W<=areaH) r else r.second to r.first   // a:b = 幅:高さ
+            if(W.toLong()*b > areaH.toLong()*a) { h=areaH; w=areaH*a/b } else { w=W; h=W*b/a }
+        }
+        val g=if(flexHingeTop>0) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.CENTER
+        val old=stage.layoutParams as FrameLayout.LayoutParams
+        if(!force && old.width==w && old.height==h && old.gravity==g) return
+        stage.layoutParams=FrameLayout.LayoutParams(w,h,g)
+        if(camera!=null && recording==null) stage.post { bindCamera() }
+    }
+    /** 半分に折って横向きの折り目があれば、上半分を映像・下半分を操作にする（Flex モード） */
+    private fun updateFlex(feature:FoldingFeature?) {
+        val flex=feature!=null && feature.state==FoldingFeature.State.HALF_OPENED && feature.orientation==FoldingFeature.Orientation.HORIZONTAL
+        val loc=IntArray(2); root.getLocationInWindow(loc)
+        val top=if(flex) feature!!.bounds.top-loc[1] else -1
+        if(top==flexHingeTop) return
+        val entering=flexHingeTop<=0 && top>0
+        flexHingeTop=top; layoutStage(force=true)
+        if(entering) showBanner("Flex モード：上が映像、下が操作",1500)
+    }
+    /** 写真ボタン長押しで連写（離すと止まる。最大 100 枚） */
+    private fun startBurst() {
+        val cap=imageCapture ?: run { message("この状態では連写できません"); return }
+        if(photoBusy || countDown!=null || burstActive) return
+        if(cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG) { message("RAW+JPEG では連写できません"); return }
+        burstActive=true; burstCount=0; burstBase=name(); shootBurst()
+    }
+    private fun shootBurst() {
+        val cap=imageCapture
+        if(!burstActive || cap==null || burstCount>=100) { burstActive=false; finishBurst(); return }
+        val opts=ImageCapture.OutputFileOptions.Builder(contentResolver,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME,"${burstBase}_B${(burstCount+1).toString().padStart(3,'0')}.jpg"); put(MediaStore.MediaColumns.MIME_TYPE,"image/jpeg"); put(MediaStore.MediaColumns.RELATIVE_PATH,"DCIM/ThetaCamera")
+        }).build()
+        try {
+            cap.takePicture(opts,main,object:ImageCapture.OnImageSavedCallback {
+                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
+                override fun onError(e:ImageCaptureException) { burstActive=false; finishBurst(); fail("連写",e) }
+            })
+        } catch(e:Exception) { burstActive=false; finishBurst(); fail("連写",e) }
+    }
+    private fun finishBurst() { if(burstCount>0) { updateThumb(); showBanner("連写 $burstCount 枚を保存しました",1800) } }
+    private fun onScan() {
+        if(recording!=null) { message("録画中はスキャンできません"); return }
+        choose("スキャン",listOf("書類（枠と傾きを自動で補正）","QR コード・バーコード")) { if(it==0) startScan() else startQr() }
+    }
+    private fun startQr() {
+        val opts=com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder().enableAutoZoom().build()
+        com.google.mlkit.vision.codescanner.GmsBarcodeScanning.getClient(this,opts).startScan()
+            .addOnSuccessListener { b -> showQr(b.rawValue ?: b.displayValue ?: "", b.url?.url) }
+            .addOnFailureListener { message("QR を読めません（Google Play 開発者サービスが必要）：${it.message}") }
+    }
+    private fun showQr(text:String, url:String?) {
+        val link=url ?: text.takeIf { it.startsWith("http://") || it.startsWith("https://") }
+        val view=TextView(this).apply { this.text=text; textSize=15f; setTextIsSelectable(true); setPadding(dp(20),dp(12),dp(20),dp(4)) }
+        val d=android.app.AlertDialog.Builder(this).setTitle("読み取り結果").setView(view)
+            .setNegativeButton("コピー") { _,_ -> (getSystemService(CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("QR",text)); message("コピーしました") }
+            .setNeutralButton("共有") { _,_ -> startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,text),"共有")) }
+        if(link!=null) d.setPositiveButton("開く") { _,_ -> runCatching { startActivity(Intent(Intent.ACTION_VIEW,Uri.parse(link))) }.onFailure { message("開けません") } }
+        d.show()
     }
     /** 純正カメラ並みにできるかを決める値（50MP・8K・スロー・Samsung 独自キーなど） */
     private fun StringBuilder.appendCameraDeep(manager:CameraManager, id:String, cc:CameraCharacteristics) {
