@@ -195,7 +195,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         autoRear = prefs.getBoolean("autoRear", true)
         lockPortrait = prefs.getBoolean("lockPortrait", true)
-        heifClap = prefs.getBoolean("heifClap", false)
+        heifClap = prefs.getBoolean("heifClap", true)
         applyOrientationLock()
         highResolution = prefs.getBoolean("highResolution", false)
         aspect = prefs.getString("aspect", "フル") ?: "フル"
