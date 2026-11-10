@@ -102,6 +102,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private var flexLandscape = false
     private val recentErrors = ArrayDeque<String>()
     private var burstLimit = 100
+    private var burstCrop: String? = null
     private var recordStartedAt = 0L
     private var heifClap = false     // 全体を HEIF で残し、画面の範囲を clap で表示
     private val meta by lazy { MetaStore(this) }
@@ -1349,6 +1350,15 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val cap=imageCapture ?: run { message("この状態では連写できません"); return }
         if(photoBusy || countDown!=null || burstActive) return
         if(cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG) { message("RAW+JPEG では連写できません"); return }
+        // HEIF（全体を残す）のときは連写の JPEG も全体のまま。画面に見えていた範囲をサイドカーに残す
+        burstCrop=if(heifClap) runCatching {
+            val res=cap.resolutionInfo!!; val sz=res.resolution
+            val disp=camera!!.cameraInfo.getSensorRotationDegrees(preview.display?.rotation ?: Surface.ROTATION_0)
+            val (fw,fh)=HeifClap.visibleFraction(sz.width,sz.height,disp,maxOf(stage.width,1),maxOf(stage.height,1))
+            val (w,h)=if(res.rotationDegrees%180!=0) sz.height to sz.width else sz.width to sz.height
+            val (cw,ch)=if(res.rotationDegrees%180!=0) (sz.height*fh).roundToInt() to (sz.width*fw).roundToInt() else (sz.width*fw).roundToInt() to (sz.height*fh).roundToInt()
+            "${cw}x${ch} / ${w}x${h}"
+        }.getOrNull() else null
         burstActive=true; burstCount=0; burstBase=name(); shootBurst()
     }
     private fun shootBurst() {
@@ -1360,7 +1370,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         }).build()
         try {
             cap.takePicture(opts,main,object:ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; r.savedUri?.let { meta.create(it,bname,saveFolder,currentEvent) }; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
+                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; r.savedUri?.let { u -> meta.create(u,bname,saveFolder,currentEvent).also { m -> burstCrop?.let { m.crop=it; meta.changed(m) } } }; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
                 override fun onError(e:ImageCaptureException) { burstActive=false; finishBurst(); fail("連写",e) }
             })
         } catch(e:Exception) { burstActive=false; finishBurst(); fail("連写",e) }
