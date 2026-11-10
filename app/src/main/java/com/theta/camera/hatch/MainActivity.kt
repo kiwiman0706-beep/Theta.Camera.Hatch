@@ -73,6 +73,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var quality = Quality.FHD
     private var videoHdr = false
     private var sixtyFps = false
+    private var slowFps = 0          // 120・240 ならスローモーション（高速度撮影）
+    private var sceneHdr = false     // Camera2 のシーンモード HDR
+    private var lowLight = false     // 暗所ブースト（OS が対応していれば）
     private var audioEnabled = true
     private var stabilization = true
     private var manualIso: Int? = null
@@ -234,7 +237,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         levelChip=icon("level","水平") { overlay.level=!overlay.level; prefs.edit().putBoolean("level",overlay.level).apply(); overlay.invalidate(); refreshInfo() }
         gridChip=icon("grid","グリッド") { overlay.grid=!overlay.grid; prefs.edit().putBoolean("grid",overlay.grid).apply(); overlay.invalidate(); refreshInfo() }
         qualityChip=icon("quality","動画の画質") { showVideoSettings() }
-        fpsChip=icon("fps","フレームレート") { if(recording!=null) { message("録画中は変更できません"); return@icon }; sixtyFps=!sixtyFps; bindCamera(); refreshInfo() }
+        fpsChip=icon("fps","フレームレート・スロー") { if(recording!=null) { message("録画中は変更できません"); return@icon }
+            val opts=fpsOptions(); val cur=if(slowFps>0) slowFps else if(sixtyFps) 60 else 30
+            val next=opts[(opts.indexOf(cur)+1)%opts.size]
+            sixtyFps=next==60; slowFps=if(next>=120) next else 0
+            if(slowFps>0) message("スローモーション ${slowFps}fps（写真・音声なし）")
+            bindCamera(); refreshInfo() }
         hudRows=vcol(Gravity.START,
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(flashChip,timerChip,evChip,aspectChip,modeChip)) },
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(levelChip,gridChip,qualityChip,fpsChip)) })
@@ -340,6 +348,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             var selector=baseSelector()
             if (!p.hasCamera(selector)) { selectedId=null; facing=CameraSelector.LENS_FACING_BACK; selector=baseSelector() }
             val baseInfo=p.getCameraInfo(selector)
+            if(slowFps>0) extensionMode=ExtensionMode.NONE
             if(extensionMode!=ExtensionMode.NONE) {
                 if(extensions?.isExtensionAvailable(selector,extensionMode)==true) selector=extensions!!.getExtensionEnabledCameraSelector(selector,extensionMode)
                 else { extensionMode=ExtensionMode.NONE; message("このレンズでは選択した拡張に非対応です。標準で撮影します") }
@@ -350,7 +359,19 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 .setResolutionStrategy(if(highResolution) ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY else ResolutionStrategy(android.util.Size(4000,3000),ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER)).build()
             val pb=Preview.Builder().setTargetRotation(preview.display?.rotation ?: Surface.ROTATION_0)
             pb.setResolutionSelector(ResolutionSelector.Builder().setAspectRatioStrategy(ratio).build())
+            // 強い手ぶれ補正（プレビューと動画の両方）。対応していなければ動画だけの補正
+            val previewStab=stabilization && slowFps==0 && runCatching { Preview.getPreviewCapabilities(baseInfo).isStabilizationSupported }.getOrDefault(false)
+            if(previewStab) pb.setPreviewStabilizationEnabled(true)
             val pv=pb.build().also { it.setSurfaceProvider(preview.surfaceProvider) }
+            if(slowFps>0) {
+                // スローモーション：高速度撮影の専用セッション（写真は撮れない）
+                val hs=Recorder.getHighSpeedVideoCapabilities(baseInfo) ?: error("このレンズはスローモーション非対応です")
+                val hq=hs.getSupportedQualities(DynamicRange.SDR)
+                val q=hq.firstOrNull { it==Quality.FHD } ?: hq.firstOrNull() ?: error("このレンズはスローモーション非対応です")
+                val vc=VideoCapture.Builder(Recorder.Builder().setQualitySelector(QualitySelector.from(q)).build()).setTargetRotation(preview.display?.rotation ?: Surface.ROTATION_0).build()
+                videoCapture=vc; imageCapture=null
+                camera=p.bindToLifecycle(this,selector,HighSpeedVideoSessionConfig.Builder(vc).setPreview(pv).setFrameRateRange(Range(slowFps,slowFps)).setSlowMotionEnabled(true).build())
+            } else {
             // 写真と動画を同時に接続（起動直後にワンタップで録画・録画中も写真）
             if(!videoOnly) {
                 val ib=ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).setJpegQuality(100).setResolutionSelector(resolution).setFlashMode(flash).setTargetRotation(preview.display?.rotation ?: Surface.ROTATION_0)
@@ -371,7 +392,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     val rec=Recorder.Builder().setQualitySelector(QualitySelector.from(quality)).build()
                     val vb=VideoCapture.Builder(rec).setDynamicRange(dr).setTargetRotation(preview.display?.rotation ?: Surface.ROTATION_0)
                     if(sixtyFps) vb.setTargetFrameRate(Range(60,60))
-                    if(stabilization && vcaps.isStabilizationSupported) vb.setVideoStabilizationEnabled(true)
+                    if(stabilization && !previewStab && vcaps.isStabilizationSupported) vb.setVideoStabilizationEnabled(true)
                     videoCapture=vb.build()
                 }
             }
@@ -387,6 +408,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 vc!=null -> bind(pv,vc)
                 else -> error("接続できる撮影機能がありません")
             }
+            }
             camera?.let { c ->
                 c.cameraInfo.zoomState.observe(this) { refreshInfo() }
                 c.cameraInfo.cameraState.observe(this) { s -> s.error?.let { lastError="CameraState error ${it.code}: ${it.cause?.message ?: ""}"; message("カメラエラー。設定の「カメラを再接続」をお試しください") } }
@@ -396,13 +418,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 exposureSeek.isEnabled=ev.isExposureCompensationSupported
                 torch=false
                 applyManual()
+                if(lowLight) watch(c.cameraControl.enableLowLightBoostAsync(true),"暗所ブースト")
             }
             setBusy(false); refreshInfo()
             if(pendingVideo) { pendingVideo=false; onVideo() } else tryAutoRear()
         } catch(e:Exception) {
             lastError="バインド失敗: ${e.message}"
             if(!fallback) {
-                extensionMode=ExtensionMode.NONE; videoOnly=false; highResolution=false; ultraHdr=false; rawJpeg=false; videoHdr=false; sixtyFps=false; stabilization=false; quality=Quality.FHD; selectedId=null; facing=CameraSelector.LENS_FACING_BACK; resetManual()
+                extensionMode=ExtensionMode.NONE; videoOnly=false; slowFps=0; sceneHdr=false; lowLight=false; highResolution=false; ultraHdr=false; rawJpeg=false; videoHdr=false; sixtyFps=false; stabilization=false; quality=Quality.FHD; selectedId=null; facing=CameraSelector.LENS_FACING_BACK; resetManual()
                 message("この撮影設定を利用できないため、標準設定で再接続します")
                 bindCamera(true)
             } else { pendingVideo=false; fail("カメラ接続（設定の端末診断を確認してください）",e) }
@@ -420,10 +443,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val evValue=ev?.let { it.exposureCompensationIndex*it.exposureCompensationStep.toFloat() } ?: 0f
         evChip.badge=if(abs(evValue)<0.05f) null else String.format(Locale.US,"%+.1f",evValue); evChip.active=abs(evValue)>=0.05f
         levelChip.active=overlay.level; gridChip.active=overlay.grid
-        modeChip.badge=when { rawJpeg -> "RAW"; ultraHdr -> "UHDR"; else -> when(extensionMode) { ExtensionMode.AUTO->"AUTO"; ExtensionMode.HDR->"HDR"; ExtensionMode.NIGHT->"夜景"; ExtensionMode.BOKEH->"ぼかし"; ExtensionMode.FACE_RETOUCH->"美肌"; else->null } }
+        modeChip.badge=when { rawJpeg -> "RAW"; ultraHdr -> "UHDR"; sceneHdr -> "HDR"; lowLight -> "暗所"; else -> when(extensionMode) { ExtensionMode.AUTO->"AUTO"; ExtensionMode.HDR->"HDR"; ExtensionMode.NIGHT->"夜景"; ExtensionMode.BOKEH->"ぼかし"; ExtensionMode.FACE_RETOUCH->"美肌"; else->null } }
         modeChip.active=modeChip.badge!=null
         qualityChip.variant=qualityName(quality).replace("1080p","FHD").replace("720p","HD"); qualityChip.badge=if(videoHdr) "HDR" else null; qualityChip.active=videoHdr
-        fpsChip.variant=if(sixtyFps) "60" else "30"; fpsChip.active=sixtyFps
+        fpsChip.variant=if(slowFps>0) "$slowFps" else if(sixtyFps) "60" else "30"; fpsChip.badge=if(slowFps>0) "SLOW" else null; fpsChip.active=sixtyFps||slowFps>0
         aspectChip.variant=aspect
         val res=imageCapture?.resolutionInfo?.resolution
         lensInfo.text="${lensName(z)} · ${String.format(Locale.US,"%.1f×",z)}${res?.let { "  ·  ${it.width}×${it.height}" } ?: ""}"
@@ -450,7 +473,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         if(countDown!=null) { countDown?.cancel(); countDown=null; message("タイマーを中止しました"); return }
         if(!hasCamera()) { permissions.launch(startPermissions()); return }
         if(camera==null) { startProvider(); return }
-        if(imageCapture==null) { message("この端末では録画中の写真に対応していません"); return }
+        if(imageCapture==null) { message(if(slowFps>0) "スローモーション中は写真を撮れません（fps を 30 に戻すと撮れます）" else "この端末では録画中の写真に対応していません"); return }
         if(timerSeconds>0 && recording==null) {
             countDown=object:CountDownTimer(timerSeconds*1000L,250){
                 override fun onTick(ms:Long){ showBanner("${ceil(ms/1000.0).toInt()} 秒後に撮影（写真をもう一度押すと中止）",600) }
@@ -504,7 +527,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val values=ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,name()+".mp4"); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,"DCIM/ThetaCamera") }
             val output=MediaStoreOutputOptions.Builder(contentResolver,MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
             var pending=cap.output.prepareRecording(this,output)
-            val withAudio=audioEnabled && ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
+            val withAudio=audioEnabled && slowFps==0 && ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
             if(withAudio) pending=pending.withAudioEnabled()
             recording=pending.start(main) { event ->
                 when(event) {
@@ -529,8 +552,21 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun qualityName(q:Quality)=when(q){Quality.UHD->"4K";Quality.FHD->"1080p";Quality.HD->"720p";Quality.SD->"SD";else->q.toString()}
     private fun showModes() {
         if(recording!=null) { message("録画中は変更できません"); return }
-        val modes=listOf(ExtensionMode.NONE,ExtensionMode.AUTO,ExtensionMode.HDR,ExtensionMode.NIGHT,ExtensionMode.BOKEH,ExtensionMode.FACE_RETOUCH).filter { it==ExtensionMode.NONE || runCatching {extensions?.isExtensionAvailable(baseSelector(),it)==true}.getOrDefault(false) }
-        choose("写真モード（このレンズの対応機能）",modes.map(::modeName)) {extensionMode=modes[it]; resetManual(); bindCamera()}
+        val ext=listOf(ExtensionMode.AUTO,ExtensionMode.HDR,ExtensionMode.NIGHT,ExtensionMode.BOKEH,ExtensionMode.FACE_RETOUCH).filter { runCatching {extensions?.isExtensionAvailable(baseSelector(),it)==true}.getOrDefault(false) }
+        val items=mutableListOf<Pair<String,()->Unit>>("標準" to { extensionMode=ExtensionMode.NONE; sceneHdr=false; lowLight=false })
+        if(characteristics()?.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES)?.contains(CaptureRequest.CONTROL_SCENE_MODE_HDR)==true)
+            items+="HDR（明暗差の大きい場面）" to { extensionMode=ExtensionMode.NONE; sceneHdr=true; lowLight=false }
+        if(camera?.cameraInfo?.isLowLightBoostSupported==true) items+="暗所ブースト（暗い場所を明るく）" to { extensionMode=ExtensionMode.NONE; sceneHdr=false; lowLight=true }
+        ext.forEach { m -> items+=modeName(m) to { extensionMode=m; sceneHdr=false; lowLight=false; slowFps=0 } }
+        choose("写真モード",items.map { it.first }) { items[it].second(); resetManual(); bindCamera(); refreshInfo() }
+    }
+    /** 選べるフレームレート：30、通常で 60 があれば 60、高速度撮影があれば 120・240（スロー） */
+    private fun fpsOptions():List<Int> {
+        val cc=characteristics() ?: return listOf(30)
+        val out=mutableListOf(30)
+        if(cc.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)?.any { it.lower==60 && it.upper==60 }==true) out+=60
+        runCatching { cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)?.highSpeedVideoFpsRanges?.filter { it.lower==it.upper && it.upper>=120 }?.map { it.upper }?.distinct()?.sorted()?.let { out+=it } }
+        return out
     }
     private fun showLenses() {
         val infos=provider?.availableCameraInfos ?: return
@@ -551,15 +587,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             "音声録音：${if(audioEnabled) "ON" else "OFF"}" to { audioEnabled=!audioEnabled; prefs.edit().putBoolean("audio",audioEnabled).apply() },
             "写真解像度：${if(highResolution) "公開される最大" else "通常"}" to { highResolution=!highResolution; prefs.edit().putBoolean("highResolution",highResolution).apply(); bindCamera() },
             "比率：$aspect" to { chooseAspect() },
-            "Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() },
-            "RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}" to { rawJpeg=!rawJpeg; if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE}; bindCamera() },
+        ).toMutableList()
+        val formats=runCatching { ImageCapture.getImageCaptureCapabilities(camera!!.cameraInfo).supportedOutputFormats }.getOrDefault(emptySet())
+        if(formats.contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)) items.add(6,"Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() })
+        if(formats.contains(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)) items.add(6,"RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}" to { rawJpeg=!rawJpeg; if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE;sceneHdr=false}; bindCamera() })
+        items.addAll(listOf<Pair<String,()->Unit>>(
             "外画面ライブにシャッターも出す：${if(coverShutter) "ON" else "OFF"}" to { coverShutter=!coverShutter; prefs.edit().putBoolean("coverShutter",coverShutter).apply(); if(coverSession!=null) { stopCover(); startCover() } },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
             "カメラを再接続" to { startProvider() },
             "純正カメラを開く" to { try {startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))} catch(e:Exception){message("純正カメラを起動できません")} },
             "端末診断" to { showDiagnostics() },
             "使い方・制限" to { android.app.AlertDialog.Builder(this).setTitle("Theta Camera Hatch ${BuildConfig.VERSION_NAME}").setMessage("写真・動画・スキャンの3つのボタンで撮影。動画中も写真を撮れます（端末が同時接続に対応している場合）。\n\n「操作を表示」でフラッシュ・タイマー・明るさ・水平・グリッド・写真モード・動画画質・レンズを出せます。\n\n開いたら自撮り：閉じた状態でこのアプリを開き、ほぼ全開にすると外画面への切替を要求します。OSの確認が出たら承認してください。録画・保存中は自動切替を保留します。\n\n写真と動画はDCIM/ThetaCamera、スキャンはDCIM/ThetaCamera/ScanとDocuments/ThetaCameraに保存。ピンチでズーム、タップでピント、音量キーで写真。\n\n50MP・HDR・望遠などはOSの公開範囲に依存します。Fold5実機での検証が必要です。").setPositiveButton("OK",null).show() },
-            "アップデート（版 ${BuildConfig.VERSION_NAME}）" to { showUpdateMenu() })
+            "アップデート（版 ${BuildConfig.VERSION_NAME}）" to { showUpdateMenu() }))
         choose("設定",items.map { it.first }) { items[it].second(); refreshInfo() }
     }
     private fun startScan() {
@@ -681,6 +720,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val c=camera ?: return
         if(extensionMode!=ExtensionMode.NONE) return
         val b=CaptureRequestOptions.Builder().setCaptureRequestOption(CaptureRequest.CONTROL_AWB_MODE,wb)
+        if(sceneHdr && slowFps==0) b.setCaptureRequestOption(CaptureRequest.CONTROL_MODE,CaptureRequest.CONTROL_MODE_USE_SCENE_MODE).setCaptureRequestOption(CaptureRequest.CONTROL_SCENE_MODE,CaptureRequest.CONTROL_SCENE_MODE_HDR)
         if(manualIso!=null && manualTime!=null) {
             b.setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE,CaptureRequest.CONTROL_AE_MODE_OFF)
                 .setCaptureRequestOption(CaptureRequest.SENSOR_SENSITIVITY,manualIso!!).setCaptureRequestOption(CaptureRequest.SENSOR_EXPOSURE_TIME,manualTime!!)
@@ -774,7 +814,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         appendLine("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}")
         appendLine("Camera permission: ${hasCamera()}")
         appendLine("Rear display: $areaStatus / session=${rearSession!=null}")
-        appendLine("Cover present (dual preview): $presentStatus / session=${coverSession!=null}")
+        appendLine("Cover present (dual preview): $presentStatus / session=${coverSession!=null} (UNAVAILABLE は閉じているときなど一時的に使えない、UNSUPPORTED は非対応)")
+        camera?.cameraInfo?.let { ci -> appendLine("Low light boost: ${ci.isLowLightBoostSupported}; torch strength: ${ci.isTorchStrengthSupported}; preview stabilization: ${runCatching { Preview.getPreviewCapabilities(ci).isStabilizationSupported }.getOrNull()}")
+            appendLine("High-speed qualities: ${runCatching { Recorder.getHighSpeedVideoCapabilities(ci)?.getSupportedQualities(DynamicRange.SDR)?.joinToString { qualityName(it) } }.getOrNull()}") }
         appendLine("Hinge sensor: ${hinge!=null}; angle=$lastAngle; autoRear=$autoRear")
         appendLine("Current resolution: ${imageCapture?.resolutionInfo?.resolution}")
         appendLine("Last error: $lastError\n")
