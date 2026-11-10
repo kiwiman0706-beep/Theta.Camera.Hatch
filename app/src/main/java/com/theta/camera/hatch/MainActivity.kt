@@ -126,6 +126,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var areaStatus = WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED
     private var areaController: WindowAreaController? = null
     private val operation = WindowAreaCapability.Operation.OPERATION_TRANSFER_ACTIVITY_TO_AREA
+    private val presentOp = WindowAreaCapability.Operation.OPERATION_PRESENT_ON_AREA
+    private var presentStatus = WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED
+    private var coverSession: WindowAreaSessionPresenter? = null
+    private var coverRequested = false
+    private var coverImage: ImageView? = null
+    private var coverShutter = false
+    private lateinit var coverChip: TextView
+    private val mirror = object : Runnable { override fun run() {
+        val img = coverImage ?: return
+        preview.bitmap?.let { img.setImageBitmap(it) }
+        handler.postDelayed(this, 66)
+    } }
     private val sensors by lazy { getSystemService(SENSOR_SERVICE) as SensorManager }
     private var hinge: Sensor? = null
     private var lastAngle: Float? = null
@@ -153,6 +165,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         autoRear = prefs.getBoolean("autoRear", true)
         highResolution = prefs.getBoolean("highResolution", false)
         aspect = prefs.getString("aspect", "3:4") ?: "3:4"
+        coverShutter = prefs.getBoolean("coverShutter", false)
         timerSeconds = prefs.getInt("timer", 0)
         audioEnabled = prefs.getBoolean("audio", true)
         lastUri = prefs.getString("lastUri", null)?.let(Uri::parse)
@@ -230,8 +243,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         // 右上：設定・外画面（表示時のみ）・操作を表示
         settingsChip=chip("設定") { showSettings() }
         rearChip=chip("外画面で自撮り") { toggleRear() }
+        coverChip=chip("外画面 OFF") { toggleCover() }
         hudToggle=chip("操作を表示") { setHud(!hudShown) }
-        ui.addView(vcol(Gravity.END,settingsChip,rearChip,hudToggle),at(Gravity.TOP or Gravity.END))
+        ui.addView(vcol(Gravity.END,settingsChip,coverChip,rearChip,hudToggle),at(Gravity.TOP or Gravity.END))
         // 知らせ
         banner=TextView(this).apply { textSize=14f; setTextColor(C_ACTIVE_TEXT); background=round(C_ACTIVE,14); setPadding(dp(16),dp(10),dp(16),dp(10)); gravity=Gravity.CENTER; maxWidth=dp(520); visibility=View.GONE; elevation=dp(4).toFloat() }
         ui.addView(banner,at(Gravity.TOP or Gravity.CENTER_HORIZONTAL,l=8,t=112,r=8))
@@ -272,7 +286,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun setHud(show:Boolean) {
         hudShown=show; prefs.edit().putBoolean("hud",show).apply()
         val vis=if(show) View.VISIBLE else View.GONE
-        hudRows.visibility=vis; lensInfo.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; lastThumb.visibility=vis
+        hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; lastThumb.visibility=vis
         if(!show) evBar.visibility=View.GONE
         hudToggle.text=if(show) "操作を隠す" else "操作を表示"
         updateRearUi()
@@ -532,6 +546,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             "比率：$aspect" to { chooseAspect() },
             "Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() },
             "RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}" to { rawJpeg=!rawJpeg; if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE}; bindCamera() },
+            "外画面ライブにシャッターも出す：${if(coverShutter) "ON" else "OFF"}" to { coverShutter=!coverShutter; prefs.edit().putBoolean("coverShutter",coverShutter).apply(); if(coverSession!=null) { stopCover(); startCover() } },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
             "カメラを再接続" to { startProvider() },
             "純正カメラを開く" to { try {startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))} catch(e:Exception){message("純正カメラを起動できません")} },
@@ -677,6 +692,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     areaController!!.windowAreaInfos.collect { infos ->
                         areaInfo=infos.firstOrNull { it.type==WindowAreaInfo.Type.TYPE_REAR_FACING }
                         areaStatus=areaInfo?.getCapability(operation)?.status ?: WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED
+                        presentStatus=areaInfo?.getCapability(presentOp)?.status ?: WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED
                         updateRearUi(); tryAutoRear()
                     }
                 }
@@ -735,6 +751,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             message(if(areaStatus==WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED) "外側画面のAPIが使えません。OSを更新し、診断結果を確認してください" else "現在は外側画面へ切替できません。本体を開いて再試行してください")
             return
         }
+        stopCover()
         rearRequested=true; selectedId=null; facing=CameraSelector.LENS_FACING_BACK; resetManual(); updateRearUi()
         try {
             areaController?.transferActivityToWindowArea(info.token,this,main,object:WindowAreaSessionCallback {
@@ -750,6 +767,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         appendLine("Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT}")
         appendLine("Camera permission: ${hasCamera()}")
         appendLine("Rear display: $areaStatus / session=${rearSession!=null}")
+        appendLine("Cover present (dual preview): $presentStatus / session=${coverSession!=null}")
         appendLine("Hinge sensor: ${hinge!=null}; angle=$lastAngle; autoRear=$autoRear")
         appendLine("Current resolution: ${imageCapture?.resolutionInfo?.resolution}")
         appendLine("Last error: $lastError\n")
@@ -787,6 +805,49 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         } }.onFailure {appendLine("Camera enumeration error: ${it.message}")}
         appendDeviceDeep(manager)
         appendLine("No photos, videos, account details, or device serial included.")
+    }
+    /** 外画面ライブ（純正のデュアルプレビュー）：開いて背面で撮るとき、外画面に映像を出して撮られる人にも見せる */
+    private fun toggleCover() { if(coverSession!=null || coverRequested) stopCover() else startCover() }
+    private fun startCover() {
+        val info=areaInfo
+        if(rearSession!=null) { message("外画面で自撮り中は使えません"); return }
+        if(info==null || presentStatus!=WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
+            message(if(presentStatus==WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED) "この端末・OSでは外画面への同時表示に対応していません（端末診断の Cover present を確認）" else "いまは外画面に表示できません。本体を開いてから押してください")
+            return
+        }
+        coverRequested=true; updateCoverUi()
+        try {
+            areaController?.presentContentOnWindowArea(info.token,this,main,object:WindowAreaPresentationSessionCallback {
+                override fun onSessionStarted(session:WindowAreaSessionPresenter) {
+                    coverRequested=false; coverSession=session; session.setContentView(buildCoverView(session.context))
+                    handler.removeCallbacks(mirror); handler.post(mirror); updateCoverUi()
+                }
+                override fun onSessionEnded(t:Throwable?) {
+                    coverRequested=false; coverSession=null; coverImage=null; handler.removeCallbacks(mirror)
+                    t?.let { lastError="外画面ライブ: ${it.message}"; message(lastError) }; updateCoverUi()
+                }
+                override fun onContainerVisibilityChanged(isVisible:Boolean) {}
+            })
+        } catch(e:Exception) { coverRequested=false; fail("外画面ライブ",e); updateCoverUi() }
+    }
+    private fun stopCover() { handler.removeCallbacks(mirror); runCatching { coverSession?.close() }; coverSession=null; coverImage=null; coverRequested=false; if(::coverChip.isInitialized) updateCoverUi() }
+    private fun buildCoverView(ctx:Context):View {
+        val frame=FrameLayout(ctx).apply { setBackgroundColor(Color.BLACK) }
+        // 撮られる人が鏡のように見られるよう左右反転
+        val img=ImageView(ctx).apply { scaleType=ImageView.ScaleType.FIT_CENTER; scaleX=-1f }
+        frame.addView(img,FrameLayout.LayoutParams(-1,-1)); coverImage=img
+        val d=ctx.resources.displayMetrics.density
+        frame.addView(TextView(ctx).apply { text="● LIVE"; textSize=13f; setTextColor(C_TEXT); background=GradientDrawable().apply { setColor(C_CHIP); cornerRadius=12*d }; setPadding((12*d).toInt(),(6*d).toInt(),(12*d).toInt(),(6*d).toInt()) },
+            FrameLayout.LayoutParams(-2,-2,Gravity.TOP or Gravity.START).apply { setMargins((16*d).toInt(),(24*d).toInt(),0,0) })
+        if(coverShutter) frame.addView(ShutterButton(ctx,ShutterButton.PHOTO).apply { contentDescription="外画面で写真"; setOnClickListener { onPhoto() } },
+            FrameLayout.LayoutParams((72*d).toInt(),(72*d).toInt(),Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin=(32*d).toInt() })
+        return frame
+    }
+    private fun updateCoverUi() {
+        if(!::coverChip.isInitialized) return
+        val on=coverSession!=null
+        coverChip.text=when { on -> "外画面 ON"; coverRequested -> "外画面…"; else -> "外画面 OFF" }
+        setActive(coverChip,on)
     }
     private fun tallAspect()=aspect=="9:16" || aspect=="フル"
     private fun chooseAspect() {
@@ -923,7 +984,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
     override fun onPause() {super.onPause();orientationListener?.disable();sensors.unregisterListener(this);countDown?.cancel();countDown=null;if(!photoBusy && recording==null){setBusy(false);refreshInfo()} }
     override fun onStop() {super.onStop();recording?.stop();handler.removeCallbacks(rearCheck);foldTrigger.reset()}
-    override fun onDestroy() {countDown?.cancel();recording?.close();runCatching {rearSession?.close()};handler.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {stopCover();countDown?.cancel();recording?.close();runCatching {rearSession?.close()};handler.removeCallbacksAndMessages(null);super.onDestroy()}
     override fun onSensorChanged(e:SensorEvent) { when(e.sensor.type) {
         Sensor.TYPE_HINGE_ANGLE -> updateAngle(e.values[0])
         Sensor.TYPE_ACCELEROMETER -> {if(overlay.level){overlay.roll=(atan2(e.values[0],e.values[1])*180/Math.PI).toFloat();overlay.invalidate()}}
