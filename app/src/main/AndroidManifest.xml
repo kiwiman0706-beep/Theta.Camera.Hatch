@@ -14,5 +14,35 @@
         <activity android:name=".MainActivity" android:exported="true" android:resizeableActivity="true" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density">
             <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
         </activity>
+        <!-- ADB の窓口（シリーズ共通 spec/THETA_ADB_SPEC.md）。DUMP 権限で adb のシェルからだけ -->
+        <service android:name="app.thetahatch.adb.StatusService" android:exported="true" android:permission="android.permission.DUMP" />
+        <receiver android:name="app.thetahatch.adb.CommandReceiver" android:exported="true" android:permission="android.permission.DUMP">
+            <intent-filter>
+                <action android:name="app.thetahatch.adb.STATUS" />
+                <action android:name="app.thetahatch.adb.GET" />
+                <action android:name="app.thetahatch.adb.SET" />
+                <action android:name="app.thetahatch.adb.OPEN" />
+                <action android:name="app.thetahatch.adb.CHECK_UPDATE" />
+                <action android:name="app.thetahatch.adb.PHOTO" />
+                <action android:name="app.thetahatch.adb.BURST" />
+                <action android:name="app.thetahatch.adb.VIDEO" />
+                <action android:name="app.thetahatch.adb.ZOOM" />
+                <action android:name="app.thetahatch.adb.FACING" />
+                <action android:name="app.thetahatch.adb.MODE" />
+                <action android:name="app.thetahatch.adb.FPS" />
+                <action android:name="app.thetahatch.adb.ASPECT" />
+                <action android:name="app.thetahatch.adb.EV" />
+                <action android:name="app.thetahatch.adb.FLASH" />
+                <action android:name="app.thetahatch.adb.TIMER" />
+                <action android:name="app.thetahatch.adb.HUD" />
+                <action android:name="app.thetahatch.adb.FOLDER" />
+                <action android:name="app.thetahatch.adb.EVENT" />
+                <action android:name="app.thetahatch.adb.VOICE" />
+                <action android:name="app.thetahatch.adb.COVER" />
+                <action android:name="app.thetahatch.adb.REAR" />
+                <action android:name="app.thetahatch.adb.REBIND" />
+                <action android:name="app.thetahatch.adb.DIAG" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

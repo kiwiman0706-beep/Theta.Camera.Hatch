@@ -42,7 +42,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
 @androidx.annotation.OptIn(markerClass = [ExperimentalCamera2Interop::class])
-class MainActivity : ComponentActivity(), SensorEventListener {
+class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.adb.AdbTarget {
     private val prefs by lazy { getSharedPreferences("camera", MODE_PRIVATE) }
     private val main by lazy { ContextCompat.getMainExecutor(this) }
     private val handler = Handler(Looper.getMainLooper())
@@ -92,6 +92,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var uiAngle = 0f
     private var halfOpen = false
     private var flexLandscape = false
+    private val recentErrors = ArrayDeque<String>()
+    private var burstLimit = 100
+    private var recordStartedAt = 0L
     private val meta by lazy { MetaStore(this) }
     private var currentEvent: String? = null
     private var selectedUri: Uri? = null
@@ -612,7 +615,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             } else { pendingVideo=false; fail("カメラ接続（設定の端末診断を確認してください）",e) }
         }
     }
-    private fun fail(where:String,e:Exception) { lastError="$where: ${e.cause?.message ?: e.message}"; message(lastError) }
+    private fun fail(where:String,e:Exception) { lastError="$where: ${e.cause?.message ?: e.message}"; noteError(lastError); message(lastError) }
+    private fun noteError(s:String) { android.util.Log.e(app.thetahatch.adb.AdbBridge.TAG,s); recentErrors.addLast("${SimpleDateFormat("HH:mm:ss",Locale.US).format(Date())} $s"); while(recentErrors.size>10) recentErrors.removeFirst() }
     private fun lensName(z:Float)=when { facing==CameraSelector.LENS_FACING_FRONT -> "インカメラ"; z<0.95f -> "超広角"; z>=2.5f -> "望遠"; else -> "広角" }
     private fun refreshInfo() {
         if(!::liveChip.isInitialized) return
@@ -714,14 +718,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             if(withAudio) pending=pending.withAudioEnabled()
             recording=pending.start(main) { event ->
                 when(event) {
-                    is VideoRecordEvent.Start -> { voice.stop(); refreshInfo(); setBusy(true); showBanner("${lensName(camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f)} · 録画開始${if(withAudio) "" else "（無音）"}",1500) }
+                    is VideoRecordEvent.Start -> { recordStartedAt=System.currentTimeMillis(); voice.stop(); refreshInfo(); setBusy(true); showBanner("${lensName(camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f)} · 録画開始${if(withAudio) "" else "（無音）"}",1500) }
                     is VideoRecordEvent.Status -> { val sec=event.recordingStats.recordedDurationNanos/1_000_000_000
                         liveChip.text="● REC ${sec/60}:${(sec%60).toString().padStart(2,'0')}"; liveChip.setTextColor(C_REC) }
                     is VideoRecordEvent.Finalize -> {
                         if(voiceOn) voice.start()
                         recording=null; videoBtn.isEnabled=true; setBusy(false)
                         if(!event.hasError()) { meta.create(event.outputResults.outputUri,videoName,vFolder,vEvent); saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
-                        else {lastError="動画終了エラー ${event.error}: ${event.cause?.message}"; message(lastError)}
+                        else {lastError="動画終了エラー ${event.error}: ${event.cause?.message}"; noteError(lastError); message(lastError)}
                         refreshInfo()
                         if(videoOnly) { videoOnly=false; bindCamera() } else tryAutoRear()
                     }
@@ -1106,6 +1110,92 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         if(camera!=null && recording==null) stage.post { bindCamera() }
     }
     /** 半分に折って横向きの折り目があれば、上半分を映像・下半分を操作にする（Flex モード） */
+    // ===== ADB の窓口（テスト・PC からの操作用） =====
+    override fun adbStatus():org.json.JSONObject {
+        val J={ org.json.JSONObject() }
+        val z=camera?.cameraInfo?.zoomState?.value
+        val missing=listOf(Manifest.permission.CAMERA,Manifest.permission.RECORD_AUDIO).filter { ContextCompat.checkSelfPermission(this,it)!=PackageManager.PERMISSION_GRANTED }
+        return J().put("app","camera").put("packageName",packageName).put("versionName",BuildConfig.VERSION_NAME).put("versionCode",BuildConfig.VERSION_CODE)
+            .put("resumed",lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
+            .put("permissionsMissing",org.json.JSONArray(missing))
+            .put("camera",J().put("bound",camera!=null).put("facing",if(facing==CameraSelector.LENS_FACING_BACK) "back" else "front")
+                .put("zoom",z?.zoomRatio?.toDouble() ?: JSONObjectNull).put("zoomRange",z?.let { "${it.minZoomRatio}-${it.maxZoomRatio}" } ?: JSONObjectNull)
+                .put("lens",lensName(z?.zoomRatio ?: 1f)).put("photoReady",imageCapture!=null).put("videoReady",videoCapture!=null)
+                .put("recording",recording!=null).put("recordSeconds",if(recording!=null) (System.currentTimeMillis()-recordStartedAt)/1000 else 0)
+                .put("photoBusy",photoBusy).put("burst",burstActive).put("timerRunning",countDown!=null)
+                .put("mode",modeKey()).put("raw",rawJpeg).put("aspect",aspect).put("quality",qualityName(quality)).put("videoHdr",videoHdr)
+                .put("fps",if(slowFps>0) slowFps else if(sixtyFps) 60 else 30).put("slowMotion",slowFps>0)
+                .put("flash",when { torch -> "torch"; flash==ImageCapture.FLASH_MODE_AUTO -> "auto"; flash==ImageCapture.FLASH_MODE_ON -> "on"; else -> "off" })
+                .put("timer",timerSeconds).put("ev",camera?.cameraInfo?.exposureState?.let { it.exposureCompensationIndex*it.exposureCompensationStep.toDouble() } ?: 0.0)
+                .put("photoResolution",imageCapture?.resolutionInfo?.resolution?.toString() ?: JSONObjectNull))
+            .put("fold",J().put("hingeAngle",lastAngle?.toDouble() ?: JSONObjectNull).put("halfOpen",halfOpen).put("flexMode",flexHingeTop>0).put("flexLandscape",flexLandscape)
+                .put("deviceAngle",deviceAngle).put("lockPortrait",lockPortrait)
+                .put("rearDisplay",areaStatus.toString()).put("rearSession",rearSession!=null).put("autoRear",autoRear)
+                .put("coverPresent",presentStatus.toString()).put("coverLive",coverSession!=null))
+            .put("ui",J().put("hud",hudShown).put("voiceShutter",voiceOn).put("saveFolder",saveFolder).put("folders",org.json.JSONArray(folders))
+                .put("event",meta.event(currentEvent)?.let { meta.label(it) } ?: JSONObjectNull).put("lastUri",lastUri?.toString() ?: JSONObjectNull))
+            .put("errors",org.json.JSONArray(recentErrors.toList()))
+    }
+    private val JSONObjectNull: Any get() = org.json.JSONObject.NULL
+    private fun modeKey()=when { sceneHdr -> "hdr"; lowLight -> "lowlight"; else -> when(extensionMode) { ExtensionMode.AUTO->"auto"; ExtensionMode.BOKEH->"bokeh"; ExtensionMode.FACE_RETOUCH->"face"; ExtensionMode.HDR->"ext-hdr"; ExtensionMode.NIGHT->"night"; else->"standard" } }
+    override fun adbCommand(command:String, extras:Bundle):Pair<Int,org.json.JSONObject> {
+        fun ok(msg:String="accepted")=0 to org.json.JSONObject().put("ok",true).put("result",msg)
+        fun bad(msg:String)=1 to org.json.JSONObject().put("error",msg)
+        val v=extras.getString("value") ?: extras.getString("action") ?: ""
+        if(recording!=null && command in setOf("MODE","FPS","ASPECT","FACING","REBIND")) return bad("recording")
+        return when(command) {
+            "STATUS" -> 0 to adbStatus()
+            "GET" -> { val k=extras.getString("key") ?: return bad("key required"); 0 to org.json.JSONObject().put("key",k).put("value",prefs.all[k] ?: JSONObjectNull) }
+            "SET" -> { val k=extras.getString("key") ?: return bad("key required"); val b=v=="true"||v=="1"||v=="on"
+                when(k) {
+                    "autoRear" -> { autoRear=b; prefs.edit().putBoolean(k,b).apply() }
+                    "audio" -> { audioEnabled=b; prefs.edit().putBoolean(k,b).apply() }
+                    "grid" -> { overlay.grid=b; prefs.edit().putBoolean(k,b).apply(); overlay.invalidate() }
+                    "level" -> { overlay.level=b; prefs.edit().putBoolean(k,b).apply(); overlay.invalidate() }
+                    "lockPortrait" -> { lockPortrait=b; prefs.edit().putBoolean(k,b).apply(); flexLandscape=false; applyOrientationLock(); rotateUi() }
+                    "coverShutter" -> { coverShutter=b; prefs.edit().putBoolean(k,b).apply() }
+                    "updateAuto" -> prefs.edit().putBoolean(k,b).apply()
+                    "highResolution" -> { highResolution=b; prefs.edit().putBoolean(k,b).apply(); bindCamera() }
+                    else -> return bad("unknown key")
+                }; refreshInfo(); ok("$k=$v") }
+            "OPEN" -> { when(v) { "settings" -> showSettings(); "diagnostics" -> showDiagnostics(); "update" -> showUpdateMenu(); "events" -> showEvents(); "search" -> showSearch(); "detail" -> showDetail(); else -> return bad("screen: settings|diagnostics|update|events|search|detail") }; ok(v) }
+            "CHECK_UPDATE" -> { checkUpdate(manual=true); ok() }
+            "PHOTO" -> { onPhoto(); ok() }
+            "BURST" -> { val n=(extras.getString("count") ?: v).toIntOrNull()?.coerceIn(1,100) ?: 5; burstLimit=n; startBurst(); ok("burst $n") }
+            "VIDEO" -> { when(v) { "start" -> if(recording==null) onVideo(); "stop" -> if(recording!=null) onVideo(); else -> onVideo() }; ok() }
+            "ZOOM" -> { val z=v.toFloatOrNull() ?: return bad("value=zoom ratio"); zoomTo(z); ok("zoom $z") }
+            "FACING" -> { facing=if(v=="front") CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK; selectedId=null; resetManual(); bindCamera(); ok(v) }
+            "MODE" -> { extensionMode=ExtensionMode.NONE; sceneHdr=false; lowLight=false
+                when(v) { "standard" -> {}; "hdr" -> sceneHdr=true; "lowlight" -> lowLight=true; "auto" -> extensionMode=ExtensionMode.AUTO; "bokeh" -> extensionMode=ExtensionMode.BOKEH; "face" -> extensionMode=ExtensionMode.FACE_RETOUCH; else -> return bad("value: standard|hdr|lowlight|auto|bokeh|face") }
+                if(extensionMode!=ExtensionMode.NONE) slowFps=0; resetManual(); bindCamera(); refreshInfo(); ok(v) }
+            "FPS" -> { val f=v.toIntOrNull() ?: return bad("value: 30|60|120|240"); if(f !in fpsOptions()) return bad("unsupported: ${fpsOptions()}")
+                sixtyFps=f==60; slowFps=if(f>=120) f else 0; bindCamera(); refreshInfo(); ok("$f") }
+            "ASPECT" -> { val a=if(v=="full") "フル" else v; if(a !in listOf("3:4","9:16","1:1","フル")) return bad("value: 3:4|9:16|1:1|full")
+                aspect=a; prefs.edit().putString("aspect",a).apply(); layoutStage(force=true); refreshInfo(); ok(v) }
+            "EV" -> { val c=camera ?: return bad("camera not bound"); val e=v.toFloatOrNull() ?: return bad("value=EV")
+                val st=c.cameraInfo.exposureState; val idx=(e/st.exposureCompensationStep.toFloat()).roundToInt().coerceIn(st.exposureCompensationRange.lower,st.exposureCompensationRange.upper)
+                watch(c.cameraControl.setExposureCompensationIndex(idx),"露出変更"); handler.postDelayed({refreshInfo()},200); ok("index $idx") }
+            "FLASH" -> { when(v) { "off" -> { flash=ImageCapture.FLASH_MODE_OFF; if(torch) { torch=false; camera?.cameraControl?.enableTorch(false) } }
+                    "auto" -> flash=ImageCapture.FLASH_MODE_AUTO; "on" -> flash=ImageCapture.FLASH_MODE_ON
+                    "torch" -> { torch=!torch; camera?.cameraControl?.enableTorch(torch) }
+                    else -> return bad("value: off|auto|on|torch") }
+                imageCapture?.flashMode=flash; refreshInfo(); ok(v) }
+            "TIMER" -> { val t=v.toIntOrNull() ?: return bad("value: 0|3|5|10"); timerSeconds=t; prefs.edit().putInt("timer",t).apply(); refreshInfo(); ok("$t") }
+            "HUD" -> { setHud(v!="hide"); ok(v) }
+            "FOLDER" -> { if(v.isBlank()) return bad("value=folder name"); if(v !in folders) { folders.add(v); prefs.edit().putString("folders",folders.joinToString("\n")).apply() }
+                saveFolder=v; prefs.edit().putString("saveFolder",v).apply(); if(hudShown) buildFolderRow(); ok(v) }
+            "EVENT" -> { if(v=="none" || v.isBlank()) { setEvent(null); return ok("none") }
+                val today=SimpleDateFormat("yyyy-MM-dd",Locale.US).format(Date())
+                val e=meta.events.firstOrNull { it.name==v } ?: meta.addEvent(v,extras.getString("start") ?: today,extras.getString("end") ?: extras.getString("start") ?: today)
+                setEvent(e.id); ok(meta.label(e)) }
+            "VOICE" -> { setVoice(v=="on"); ok(v) }
+            "COVER" -> { if(v=="off") stopCover() else startCover(); ok(v) }
+            "REAR" -> { toggleRear(); ok() }
+            "REBIND" -> { startProvider(); ok() }
+            "DIAG" -> 0 to org.json.JSONObject().put("report",diagnosticText())
+            else -> 1 to org.json.JSONObject().put("error","unknown command")
+        }
+    }
     private fun applyOrientationLock() {
         requestedOrientation=when { flexLandscape -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             lockPortrait -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -1151,7 +1241,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
     private fun shootBurst() {
         val cap=imageCapture
-        if(!burstActive || cap==null || burstCount>=100) { burstActive=false; finishBurst(); return }
+        if(!burstActive || cap==null || burstCount>=burstLimit) { burstActive=false; finishBurst(); return }
         val bname="${burstBase}_B${(burstCount+1).toString().padStart(3,'0')}.jpg"
         val opts=ImageCapture.OutputFileOptions.Builder(contentResolver,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME,bname); put(MediaStore.MediaColumns.MIME_TYPE,"image/jpeg"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir())
@@ -1163,7 +1253,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             })
         } catch(e:Exception) { burstActive=false; finishBurst(); fail("連写",e) }
     }
-    private fun finishBurst() { if(burstCount>0) { updateThumb(); showBanner("連写 $burstCount 枚を保存しました",1800) } }
+    private fun finishBurst() { burstLimit=100; if(burstCount>0) { updateThumb(); showBanner("連写 $burstCount 枚を保存しました",1800) } }
     private fun onScan() {
         if(recording!=null) { message("録画中はスキャンできません"); return }
         choose("スキャン",listOf("書類（枠と傾きを自動で補正）","QR コード・バーコード")) { if(it==0) startScan() else startQr() }
@@ -1245,7 +1335,12 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
     override fun onPause() {super.onPause();voice.stop();orientationListener?.disable();sensors.unregisterListener(this);countDown?.cancel();countDown=null;if(!photoBusy && recording==null){setBusy(false);refreshInfo()} }
     override fun onStop() {super.onStop();recording?.stop();handler.removeCallbacks(rearCheck);foldTrigger.reset()}
-    override fun onDestroy() {stopCover();countDown?.cancel();recording?.close();runCatching {rearSession?.close()};handler.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onStart() {
+        super.onStart()
+        app.thetahatch.adb.AdbBridge.attach(this)
+        runCatching { startService(Intent(this, app.thetahatch.adb.StatusService::class.java)) }
+    }
+    override fun onDestroy() {app.thetahatch.adb.AdbBridge.detach(this);stopCover();countDown?.cancel();recording?.close();runCatching {rearSession?.close()};handler.removeCallbacksAndMessages(null);super.onDestroy()}
     override fun onSensorChanged(e:SensorEvent) { when(e.sensor.type) {
         Sensor.TYPE_HINGE_ANGLE -> updateAngle(e.values[0])
         Sensor.TYPE_ACCELEROMETER -> {if(overlay.level){overlay.roll=(atan2(e.values[0],e.values[1])*180/Math.PI).toFloat();overlay.invalidate()}}
