@@ -85,6 +85,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var folders = mutableListOf<String>()
     private var saveFolder = "未整理"
     private var stripFilter: String? = null
+    // 画面の向きは縦に固定し、端末を横にしたらアイコンだけ回す（純正カメラと同じ）
+    private val rotatables = mutableListOf<View>()
+    private var lockPortrait = true
+    private var deviceAngle = 0
+    private var uiAngle = 0f
+    private var halfOpen = false
+    private var flexLandscape = false
     private val meta by lazy { MetaStore(this) }
     private var currentEvent: String? = null
     private var selectedUri: Uri? = null
@@ -183,6 +190,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         autoRear = prefs.getBoolean("autoRear", true)
+        lockPortrait = prefs.getBoolean("lockPortrait", true)
+        applyOrientationLock()
         highResolution = prefs.getBoolean("highResolution", false)
         aspect = prefs.getString("aspect", "フル") ?: "フル"
         coverShutter = prefs.getBoolean("coverShutter", false)
@@ -200,7 +209,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         autoCheckUpdate()
         orientationListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(angle: Int) {
-                if (angle == ORIENTATION_UNKNOWN || recording != null) return
+                if (angle == ORIENTATION_UNKNOWN) return
+                val q = when (angle) { in 45..134 -> 90; in 135..224 -> 180; in 225..314 -> 270; else -> 0 }
+                if (q != deviceAngle) { deviceAngle = q; updateFlexOrientation(); rotateUi() }
+                if (recording != null) return
                 val rotation = when (angle) { in 45..134 -> Surface.ROTATION_270; in 135..224 -> Surface.ROTATION_180; in 225..314 -> Surface.ROTATION_90; else -> Surface.ROTATION_0 }
                 imageCapture?.targetRotation = rotation
                 videoCapture?.targetRotation = rotation
@@ -221,7 +233,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun setActive(v:TextView,on:Boolean) { v.background=round(if(on) C_ACTIVE else C_CHIP,12); v.setTextColor(if(on) C_ACTIVE_TEXT else C_TEXT) }
     /** モノクロ・背景透明のアイコン。長押しで名前が出る */
     private fun icon(kind:String, desc:String, action:()->Unit) = IconButton(this,kind).apply {
-        contentDescription=desc; tooltipText=desc; setOnClickListener { action() }
+        contentDescription=desc; tooltipText=desc; setOnClickListener { action() }; rotation=uiAngle; rotatables.add(this)
         layoutParams=LinearLayout.LayoutParams(dp(44),dp(44)).apply { setMargins(dp(1),0,dp(1),0) }
     }
     private fun hrow(vararg views:View) = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; views.forEach { addView(it) } }
@@ -292,7 +304,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val c=shadowText(t,12f).apply { typeface=Typeface.DEFAULT_BOLD; contentDescription="${t}倍"
                 setOnClickListener { if(facing!=CameraSelector.LENS_FACING_BACK) { facing=CameraSelector.LENS_FACING_BACK; selectedId=null; resetManual(); bindCamera() }; zoomTo(z) }
                 layoutParams=LinearLayout.LayoutParams(dp(40),dp(40)).apply { setMargins(dp(3),0,dp(3),0) } }
-            zoomChips.add(z to c); zoomPill.addView(c) }
+            zoomChips.add(z to c); rotatables.add(c); zoomPill.addView(c) }
         zoomPill.addView(icon("flip","前後のカメラを切り替え") { if(recording!=null) { message("録画中は切り替えられません"); return@icon }
             facing=if(facing==CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
             selectedId=null; resetManual(); bindCamera() })
@@ -318,6 +330,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         bottomBox=vcol(Gravity.CENTER_HORIZONTAL,stripBox,evBar,zoomPill)
         ui.addView(bottomBox,at(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         lastThumb=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; background=GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(60,0,0,0)); setStroke(dp(2),Color.WHITE) }; clipToOutline=true; setPadding(dp(2),dp(2),dp(2),dp(2)); contentDescription="直前の写真・動画を開く"; setOnClickListener { openLast() } }
+        rotatables.add(lastThumb); rotatables.add(scanBtn)
         ui.addView(lastThumb,FrameLayout.LayoutParams(dp(46),dp(46),Gravity.BOTTOM or Gravity.START).apply { bottomMargin=dp(20); leftMargin=dp(6) })
         arrangeUi(); setHud(prefs.getBoolean("hud",false)); setContentView(root); updateThumb()
         val pinch=ScaleGestureDetector(this,object:ScaleGestureDetector.SimpleOnScaleGestureListener(){ override fun onScale(d:ScaleGestureDetector):Boolean { camera?.cameraInfo?.zoomState?.value?.let { zoomTo(it.zoomRatio*d.scaleFactor) }; return true } })
@@ -449,7 +462,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }.getOrDefault(emptyList()) }
             thumbStrip.removeAllViews()
             items.filter { meta.matches(meta.get(it.first),searchQuery,starOnly) }.forEach { (u,v) ->
-                val t=ThumbView(this@MainActivity,v).apply { contentDescription=if(v) "動画（押すと選ぶ、もう一度で開く）" else "写真（押すと選ぶ、もう一度で開く）"
+                val t=ThumbView(this@MainActivity,v).apply { rotation=uiAngle; contentDescription=if(v) "動画（押すと選ぶ、もう一度で開く）" else "写真（押すと選ぶ、もう一度で開く）"
                     favorite=meta.get(u)?.favorite==true; selected2=u==selectedUri
                     setOnClickListener { if(selectedUri==u) openUri(u,v) else { selectedUri=u; refreshStrip(); refreshInfoBar() } } }
                 thumbStrip.addView(t,LinearLayout.LayoutParams(dp(46),dp(46)).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) })
@@ -765,6 +778,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         items.addAll(listOf<Pair<String,()->Unit>>(
             "外画面ライブにシャッターも出す：${if(coverShutter) "ON" else "OFF"}" to { coverShutter=!coverShutter; prefs.edit().putBoolean("coverShutter",coverShutter).apply(); if(coverSession!=null) { stopCover(); startCover() } },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
+            "画面の向き：${if(lockPortrait) "縦に固定（アイコンだけ回る）" else "端末に合わせて回る"}" to { lockPortrait=!lockPortrait; prefs.edit().putBoolean("lockPortrait",lockPortrait).apply(); flexLandscape=false; applyOrientationLock(); rotateUi() },
             "カメラを再接続" to { startProvider() },
             "純正カメラを開く" to { try {startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))} catch(e:Exception){message("純正カメラを起動できません")} },
             "端末診断" to { showDiagnostics() },
@@ -1092,7 +1106,34 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         if(camera!=null && recording==null) stage.post { bindCamera() }
     }
     /** 半分に折って横向きの折り目があれば、上半分を映像・下半分を操作にする（Flex モード） */
+    private fun applyOrientationLock() {
+        requestedOrientation=when { flexLandscape -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            lockPortrait -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
+    /** 半分折って横にしたときだけ横画面にして Flex モードへ。開き切ったら縦に戻す */
+    private fun updateFlexOrientation() {
+        if(!lockPortrait) return
+        val want=halfOpen && (deviceAngle==90 || deviceAngle==270)
+        if(want==flexLandscape) return
+        if(!want && halfOpen && flexLandscape) return   // 半開きのまま少し傾けただけでは戻さない
+        flexLandscape=want; applyOrientationLock(); rotateUi()
+    }
+    /** 端末の向きに合わせて、アイコン・数字・サムネイルを起こす */
+    private fun rotateUi() {
+        if(!::banner.isInitialized) return
+        val target=if(lockPortrait && !flexLandscape) when(deviceAngle) { 90 -> -90f; 180 -> 180f; 270 -> 90f; else -> 0f } else 0f
+        uiAngle=target
+        val views=rotatables+(0 until thumbStrip.childCount).map { thumbStrip.getChildAt(it) }
+        views.forEach { v -> var d=target-v.rotation; while(d>180) d-=360; while(d<-180) d+=360; v.animate().rotationBy(d).setDuration(220).start() }
+        // 知らせの帯は横向きのとき画面の中央で回す
+        val lp=banner.layoutParams as FrameLayout.LayoutParams
+        lp.gravity=if(target==0f) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.CENTER
+        banner.layoutParams=lp; banner.rotation=target
+    }
     private fun updateFlex(feature:FoldingFeature?) {
+        halfOpen=feature?.state==FoldingFeature.State.HALF_OPENED
+        if(!halfOpen && flexLandscape) { flexLandscape=false; applyOrientationLock() } else updateFlexOrientation()
         val flex=feature!=null && feature.state==FoldingFeature.State.HALF_OPENED && feature.orientation==FoldingFeature.Orientation.HORIZONTAL
         val loc=IntArray(2); root.getLocationInWindow(loc)
         val top=if(flex) feature!!.bounds.top-loc[1] else -1
