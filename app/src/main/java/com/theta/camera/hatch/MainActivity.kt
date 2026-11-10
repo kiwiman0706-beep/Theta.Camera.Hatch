@@ -60,7 +60,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var highResolution = false
     private var aspect = "3:4"   // 3:4・9:16・1:1・フル（見えている範囲がそのまま保存される）
     private lateinit var stage: FrameLayout
-    private lateinit var aspectChip: TextView
+    private lateinit var aspectChip: IconButton
     private var flexHingeTop = -1   // 半分折った Flex モードのとき、折り目の上端（px）
     private var burstActive = false
     private var burstCount = 0
@@ -91,17 +91,17 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var liveChip: TextView
     private lateinit var lensInfo: TextView
     private lateinit var hudRows: LinearLayout
-    private lateinit var flashChip: TextView
-    private lateinit var timerChip: TextView
-    private lateinit var evChip: TextView
-    private lateinit var levelChip: TextView
-    private lateinit var gridChip: TextView
-    private lateinit var modeChip: TextView
-    private lateinit var qualityChip: TextView
-    private lateinit var fpsChip: TextView
-    private lateinit var settingsChip: TextView
-    private lateinit var rearChip: TextView
-    private lateinit var hudToggle: TextView
+    private lateinit var flashChip: IconButton
+    private lateinit var timerChip: IconButton
+    private lateinit var evChip: IconButton
+    private lateinit var levelChip: IconButton
+    private lateinit var gridChip: IconButton
+    private lateinit var modeChip: IconButton
+    private lateinit var qualityChip: IconButton
+    private lateinit var fpsChip: IconButton
+    private lateinit var settingsChip: IconButton
+    private lateinit var rearChip: IconButton
+    private lateinit var hudToggle: IconButton
     private lateinit var evBar: LinearLayout
     private lateinit var exposureSeek: SeekBar
     private lateinit var zoomPill: LinearLayout
@@ -112,7 +112,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private lateinit var photoBtn: ShutterButton
     private lateinit var videoBtn: ShutterButton
     private lateinit var scanBtn: ShutterButton
-    private lateinit var videoLabel: TextView
     private var hudShown = false
     private var pendingVideo = false
     private var videoOnly = false
@@ -132,7 +131,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var coverRequested = false
     private var coverImage: ImageView? = null
     private var coverShutter = false
-    private lateinit var coverChip: TextView
+    private lateinit var coverChip: IconButton
     private val mirror = object : Runnable { override fun run() {
         val img = coverImage ?: return
         preview.bitmap?.let { img.setImageBitmap(it) }
@@ -164,7 +163,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         autoRear = prefs.getBoolean("autoRear", true)
         highResolution = prefs.getBoolean("highResolution", false)
-        aspect = prefs.getString("aspect", "3:4") ?: "3:4"
+        aspect = prefs.getString("aspect", "フル") ?: "フル"
         coverShutter = prefs.getBoolean("coverShutter", false)
         timerSeconds = prefs.getInt("timer", 0)
         audioEnabled = prefs.getBoolean("audio", true)
@@ -194,16 +193,18 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         layoutParams=LinearLayout.LayoutParams(-2,dp(40)).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) }
     }
     private fun setActive(v:TextView,on:Boolean) { v.background=round(if(on) C_ACTIVE else C_CHIP,12); v.setTextColor(if(on) C_ACTIVE_TEXT else C_TEXT) }
+    /** モノクロ・背景透明のアイコン。長押しで名前が出る */
+    private fun icon(kind:String, desc:String, action:()->Unit) = IconButton(this,kind).apply {
+        contentDescription=desc; tooltipText=desc; setOnClickListener { action() }
+        layoutParams=LinearLayout.LayoutParams(dp(44),dp(44)).apply { setMargins(dp(1),0,dp(1),0) }
+    }
     private fun hrow(vararg views:View) = LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; views.forEach { addView(it) } }
     private fun vcol(g:Int, vararg views:View) = LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; gravity=g; views.forEach { addView(it) } }
     private fun at(g:Int, l:Int=0, t:Int=0, r:Int=0, b:Int=0) = FrameLayout.LayoutParams(-2,-2,g).apply { setMargins(dp(l),dp(t),dp(r),dp(b)) }
     private fun shadowText(s:String, size:Float, color:Int=C_TEXT) = TextView(this).apply { text=s; textSize=size; setTextColor(color); gravity=Gravity.CENTER; setShadowLayer(6f,0f,1f,Color.BLACK) }
-    private fun shutterItem(b:ShutterButton, text:String, size:Int, action:()->Unit):Pair<LinearLayout,TextView> {
-        val lbl=shadowText(text,12f)
-        b.contentDescription=text; b.setOnClickListener { action() }
-        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; gravity=Gravity.CENTER_HORIZONTAL; setPadding(dp(12),dp(4),dp(12),dp(4))
-            addView(b,LinearLayout.LayoutParams(dp(size),dp(size))); addView(lbl) }
-        return box to lbl
+    private fun shutterItem(b:ShutterButton, text:String, size:Int, action:()->Unit):View {
+        b.contentDescription=text; b.tooltipText=text; b.setOnClickListener { action() }
+        return FrameLayout(this).apply { setPadding(dp(14),dp(6),dp(14),dp(6)); addView(b,FrameLayout.LayoutParams(dp(size),dp(size),Gravity.CENTER)) }
     }
     private val hideBanner=Runnable { if(::banner.isInitialized) banner.animate().alpha(0f).setDuration(250).withEndAction { banner.visibility=View.GONE }.start() }
     private fun showBanner(s:String, ms:Long) {
@@ -222,54 +223,58 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         ui=FrameLayout(this); root.addView(ui,FrameLayout.LayoutParams(-1,-1))
         ui.setOnApplyWindowInsetsListener { v,ins ->
             val b=androidx.core.view.WindowInsetsCompat.toWindowInsetsCompat(ins).getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() or androidx.core.view.WindowInsetsCompat.Type.displayCutout())
-            v.setPadding(b.left+dp(12),b.top+dp(10),b.right+dp(12),b.bottom+dp(10)); ins
+            v.setPadding(b.left+dp(8),b.top+dp(6),b.right+dp(8),b.bottom+dp(8)); ins
         }
         // 左上：操作（表示時のみ）・LIVE・レンズ
-        flashChip=chip("") { showFlash() }
-        timerChip=chip("") { timerSeconds=listOf(0,3,5,10).let { it[(it.indexOf(timerSeconds)+1)%it.size] }; prefs.edit().putInt("timer",timerSeconds).apply(); refreshInfo() }
-        evChip=chip("±0 EV") { evBar.visibility=if(evBar.visibility==View.VISIBLE) View.GONE else View.VISIBLE }
-        levelChip=chip("水平") { overlay.level=!overlay.level; prefs.edit().putBoolean("level",overlay.level).apply(); overlay.invalidate(); refreshInfo() }
-        gridChip=chip("グリッド") { overlay.grid=!overlay.grid; prefs.edit().putBoolean("grid",overlay.grid).apply(); overlay.invalidate(); refreshInfo() }
-        modeChip=chip("") { showModes() }
-        qualityChip=chip("") { showVideoSettings() }
-        aspectChip=chip("") { chooseAspect() }
-        fpsChip=chip("") { if(recording!=null) { message("録画中は変更できません"); return@chip }; sixtyFps=!sixtyFps; bindCamera(); refreshInfo() }
+        flashChip=icon("flash","フラッシュ") { showFlash() }
+        timerChip=icon("timer","セルフタイマー") { timerSeconds=listOf(0,3,5,10).let { it[(it.indexOf(timerSeconds)+1)%it.size] }; prefs.edit().putInt("timer",timerSeconds).apply(); refreshInfo() }
+        evChip=icon("ev","明るさ") { evBar.visibility=if(evBar.visibility==View.VISIBLE) View.GONE else View.VISIBLE }
+        aspectChip=icon("aspect","比率") { chooseAspect() }
+        modeChip=icon("mode","写真モード") { showModes() }
+        levelChip=icon("level","水平") { overlay.level=!overlay.level; prefs.edit().putBoolean("level",overlay.level).apply(); overlay.invalidate(); refreshInfo() }
+        gridChip=icon("grid","グリッド") { overlay.grid=!overlay.grid; prefs.edit().putBoolean("grid",overlay.grid).apply(); overlay.invalidate(); refreshInfo() }
+        qualityChip=icon("quality","動画の画質") { showVideoSettings() }
+        fpsChip=icon("fps","フレームレート") { if(recording!=null) { message("録画中は変更できません"); return@icon }; sixtyFps=!sixtyFps; bindCamera(); refreshInfo() }
         hudRows=vcol(Gravity.START,
-            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(flashChip,timerChip,evChip,levelChip,gridChip)) },
-            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(modeChip,aspectChip,qualityChip,fpsChip)) })
-        liveChip=chip("● LIVE") {}.apply { isClickable=false }
-        lensInfo=shadowText("",12f,C_SUB).apply { gravity=Gravity.START; setPadding(dp(6),dp(2),dp(6),dp(2)) }
-        ui.addView(vcol(Gravity.START,hudRows,liveChip,lensInfo),at(Gravity.TOP or Gravity.START,r=124))
-        // 右上：設定・外画面（表示時のみ）・操作を表示
-        settingsChip=chip("設定") { showSettings() }
-        rearChip=chip("外画面で自撮り") { toggleRear() }
-        coverChip=chip("外画面 OFF") { toggleCover() }
-        hudToggle=chip("操作を表示") { setHud(!hudShown) }
-        ui.addView(vcol(Gravity.END,settingsChip,coverChip,rearChip,hudToggle),at(Gravity.TOP or Gravity.END))
+            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(flashChip,timerChip,evChip,aspectChip,modeChip)) },
+            HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(hrow(levelChip,gridChip,qualityChip,fpsChip)) })
+        liveChip=shadowText("● LIVE",12f).apply { gravity=Gravity.START; setPadding(dp(10),dp(8),dp(10),dp(4)); letterSpacing=0.08f }
+        lensInfo=shadowText("",11f,C_SUB).apply { gravity=Gravity.START; setPadding(dp(10),0,dp(10),dp(2)) }
+        ui.addView(vcol(Gravity.START,hudRows,liveChip,lensInfo),at(Gravity.TOP or Gravity.START,r=56))
+        // 右上：操作の表示切替・設定・外画面
+        hudToggle=icon("hud","操作を表示／隠す") { setHud(!hudShown) }
+        settingsChip=icon("settings","設定") { showSettings() }
+        coverChip=icon("cover","外画面ライブ") { toggleCover() }
+        rearChip=icon("rear","外画面で自撮り") { toggleRear() }
+        ui.addView(vcol(Gravity.END,hudToggle,settingsChip,coverChip,rearChip),at(Gravity.TOP or Gravity.END))
         // 知らせ
-        banner=TextView(this).apply { textSize=14f; setTextColor(C_ACTIVE_TEXT); background=round(C_ACTIVE,14); setPadding(dp(16),dp(10),dp(16),dp(10)); gravity=Gravity.CENTER; maxWidth=dp(520); visibility=View.GONE; elevation=dp(4).toFloat() }
-        ui.addView(banner,at(Gravity.TOP or Gravity.CENTER_HORIZONTAL,l=8,t=112,r=8))
+        banner=TextView(this).apply { textSize=13f; setTextColor(Color.WHITE); background=round(Color.argb(150,0,0,0),16); setPadding(dp(16),dp(10),dp(16),dp(10)); gravity=Gravity.CENTER; maxWidth=dp(520); visibility=View.GONE; elevation=dp(4).toFloat() }
+        ui.addView(banner,at(Gravity.TOP or Gravity.CENTER_HORIZONTAL,l=60,t=56,r=60))
         // 下：明るさ・レンズ・シャッター
         exposureSeek=SeekBar(this).apply { setOnSeekBarChangeListener(seekListener { camera?.let { c -> watch(c.cameraControl.setExposureCompensationIndex(it+c.cameraInfo.exposureState.exposureCompensationRange.lower),"露出変更"); handler.postDelayed({refreshInfo()},150) } }) }
-        evBar=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; background=round(C_CHIP,22); setPadding(dp(12),dp(2),dp(4),dp(2)); visibility=View.GONE
-            addView(shadowText("明るさ",12f)); addView(exposureSeek,LinearLayout.LayoutParams(dp(220),dp(40)))
-            addView(chip("完了") { visibility=View.GONE }) }
-        zoomPill=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; background=round(C_CHIP,24); setPadding(dp(4),dp(2),dp(4),dp(2)) }
-        listOf(0.6f to "0.6×",1f to "1×",3f to "3×").forEach { (z,t) -> val c=chip(t) { if(facing!=CameraSelector.LENS_FACING_BACK) { facing=CameraSelector.LENS_FACING_BACK; selectedId=null; resetManual(); bindCamera() }; zoomTo(z) }.apply { background=null }; zoomChips.add(z to c); zoomPill.addView(c) }
-        zoomPill.addView(chip("⟲") { if(recording!=null) { message("録画中は切り替えられません"); return@chip }
+        exposureSeek.progressTintList=android.content.res.ColorStateList.valueOf(Color.WHITE); exposureSeek.thumbTintList=android.content.res.ColorStateList.valueOf(Color.WHITE)
+        exposureSeek.progressBackgroundTintList=android.content.res.ColorStateList.valueOf(Color.argb(140,255,255,255))
+        evBar=LinearLayout(this).apply { gravity=Gravity.CENTER; visibility=View.GONE; addView(exposureSeek,LinearLayout.LayoutParams(dp(260),dp(40))) }
+        zoomPill=LinearLayout(this).apply { orientation=LinearLayout.HORIZONTAL; gravity=Gravity.CENTER_VERTICAL; setPadding(0,dp(2),0,dp(2)) }
+        listOf(0.6f to "0.6",1f to "1×",3f to "3").forEach { (z,t) ->
+            val c=shadowText(t,12f).apply { typeface=Typeface.DEFAULT_BOLD; contentDescription="${t}倍"
+                setOnClickListener { if(facing!=CameraSelector.LENS_FACING_BACK) { facing=CameraSelector.LENS_FACING_BACK; selectedId=null; resetManual(); bindCamera() }; zoomTo(z) }
+                layoutParams=LinearLayout.LayoutParams(dp(40),dp(40)).apply { setMargins(dp(3),0,dp(3),0) } }
+            zoomChips.add(z to c); zoomPill.addView(c) }
+        zoomPill.addView(icon("flip","前後のカメラを切り替え") { if(recording!=null) { message("録画中は切り替えられません"); return@icon }
             facing=if(facing==CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
-            selectedId=null; resetManual(); bindCamera() }.apply { background=null; contentDescription="前後のカメラを切り替え" })
+            selectedId=null; resetManual(); bindCamera() })
         photoBtn=ShutterButton(this,ShutterButton.PHOTO); videoBtn=ShutterButton(this,ShutterButton.VIDEO); scanBtn=ShutterButton(this,ShutterButton.SCAN)
-        val (p,_)=shutterItem(photoBtn,"写真",64) { onPhoto() }
-        val (v,vl)=shutterItem(videoBtn,"動画",76) { onVideo() }; videoLabel=vl
-        val (s,_)=shutterItem(scanBtn,"スキャン",56) { onScan() }
+        val p=shutterItem(photoBtn,"写真（長押しで連写）",62) { onPhoto() }
+        val v=shutterItem(videoBtn,"動画",74) { onVideo() }
+        val s=shutterItem(scanBtn,"スキャン（書類・QR）",50) { onScan() }
         photoBtn.setOnLongClickListener { startBurst(); true }
         photoBtn.setOnTouchListener { _,e -> if(e.actionMasked==MotionEvent.ACTION_UP || e.actionMasked==MotionEvent.ACTION_CANCEL) burstActive=false; false }
         shutterBar=LinearLayout(this).apply { gravity=Gravity.CENTER; addView(p); addView(v); addView(s) }
         bottomBox=vcol(Gravity.CENTER_HORIZONTAL,evBar,zoomPill)
         ui.addView(bottomBox,at(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
-        lastThumb=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; background=round(C_CHIP,14); clipToOutline=true; contentDescription="直前の写真・動画を開く"; setOnClickListener { openLast() } }
-        ui.addView(lastThumb,FrameLayout.LayoutParams(dp(52),dp(52),Gravity.BOTTOM or Gravity.START).apply { bottomMargin=dp(14) })
+        lastThumb=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; background=GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(60,0,0,0)); setStroke(dp(2),Color.WHITE) }; clipToOutline=true; setPadding(dp(2),dp(2),dp(2),dp(2)); contentDescription="直前の写真・動画を開く"; setOnClickListener { openLast() } }
+        ui.addView(lastThumb,FrameLayout.LayoutParams(dp(46),dp(46),Gravity.BOTTOM or Gravity.START).apply { bottomMargin=dp(20); leftMargin=dp(6) })
         arrangeUi(); setHud(prefs.getBoolean("hud",false)); setContentView(root); updateThumb()
         val pinch=ScaleGestureDetector(this,object:ScaleGestureDetector.SimpleOnScaleGestureListener(){ override fun onScale(d:ScaleGestureDetector):Boolean { camera?.cameraInfo?.zoomState?.value?.let { zoomTo(it.zoomRatio*d.scaleFactor) }; return true } })
         val gestures=GestureDetector(this,object:GestureDetector.SimpleOnGestureListener(){
@@ -288,7 +293,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         val vis=if(show) View.VISIBLE else View.GONE
         hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; lastThumb.visibility=vis
         if(!show) evBar.visibility=View.GONE
-        hudToggle.text=if(show) "操作を隠す" else "操作を表示"
+        hudToggle.active=show
         updateRearUi()
     }
     /** 横長の画面ではシャッターを右端の縦並びに、それ以外は下の横並び */
@@ -408,24 +413,26 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun refreshInfo() {
         if(!::liveChip.isInitialized) return
         val z=camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f
-        flashChip.text="⚡ "+when(flash){ImageCapture.FLASH_MODE_AUTO->"自動";ImageCapture.FLASH_MODE_ON->"ON";else->"OFF"}+if(torch) "・ライト" else ""
-        setActive(flashChip,flash!=ImageCapture.FLASH_MODE_OFF||torch)
-        timerChip.text=if(timerSeconds==0) "⏱ OFF" else "⏱ ${timerSeconds}秒"; setActive(timerChip,timerSeconds>0)
+        flashChip.variant=when { torch -> "torch"; flash==ImageCapture.FLASH_MODE_AUTO -> "auto"; flash==ImageCapture.FLASH_MODE_ON -> "on"; else -> "off" }
+        flashChip.active=flash!=ImageCapture.FLASH_MODE_OFF||torch
+        timerChip.badge=if(timerSeconds==0) null else "$timerSeconds"; timerChip.active=timerSeconds>0
         val ev=camera?.cameraInfo?.exposureState
         val evValue=ev?.let { it.exposureCompensationIndex*it.exposureCompensationStep.toFloat() } ?: 0f
-        evChip.text=if(abs(evValue)<0.05f) "±0 EV" else String.format(Locale.US,"%+.1f EV",evValue); setActive(evChip,abs(evValue)>=0.05f)
-        setActive(levelChip,overlay.level); setActive(gridChip,overlay.grid)
-        modeChip.text="写真 "+modeName(extensionMode)+if(rawJpeg) "・RAW" else if(ultraHdr) "・UHDR" else ""
-        setActive(modeChip,extensionMode!=ExtensionMode.NONE||rawJpeg||ultraHdr)
-        qualityChip.text=qualityName(quality)+if(videoHdr) " HDR" else ""; setActive(qualityChip,videoHdr)
-        fpsChip.text=if(sixtyFps) "60 fps" else "30 fps"; setActive(fpsChip,sixtyFps)
-        aspectChip.text=aspect
+        evChip.badge=if(abs(evValue)<0.05f) null else String.format(Locale.US,"%+.1f",evValue); evChip.active=abs(evValue)>=0.05f
+        levelChip.active=overlay.level; gridChip.active=overlay.grid
+        modeChip.badge=when { rawJpeg -> "RAW"; ultraHdr -> "UHDR"; else -> when(extensionMode) { ExtensionMode.AUTO->"AUTO"; ExtensionMode.HDR->"HDR"; ExtensionMode.NIGHT->"夜景"; ExtensionMode.BOKEH->"ぼかし"; ExtensionMode.FACE_RETOUCH->"美肌"; else->null } }
+        modeChip.active=modeChip.badge!=null
+        qualityChip.variant=qualityName(quality).replace("1080p","FHD").replace("720p","HD"); qualityChip.badge=if(videoHdr) "HDR" else null; qualityChip.active=videoHdr
+        fpsChip.variant=if(sixtyFps) "60" else "30"; fpsChip.active=sixtyFps
+        aspectChip.variant=aspect
         val res=imageCapture?.resolutionInfo?.resolution
         lensInfo.text="${lensName(z)} · ${String.format(Locale.US,"%.1f×",z)}${res?.let { "  ·  ${it.width}×${it.height}" } ?: ""}"
         val near=zoomChips.minByOrNull { abs(it.first-z) }?.first
-        zoomChips.forEach { (v,c) -> if(v==near && facing==CameraSelector.LENS_FACING_BACK) { c.background=round(C_ACTIVE,18); c.setTextColor(C_ACTIVE_TEXT) } else { c.background=null; c.setTextColor(C_TEXT) } }
-        if(recording==null) { liveChip.text="● LIVE"; liveChip.background=round(C_CHIP,12); liveChip.setTextColor(C_TEXT) }
-        videoBtn.recording=recording!=null; videoLabel.text=if(recording!=null) "停止" else "動画"
+        zoomChips.forEach { (v,c) -> val on=v==near && facing==CameraSelector.LENS_FACING_BACK
+            c.background=if(on) GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(70,0,0,0)); setStroke(dp(1),Color.WHITE) } else null
+            c.text=if(on) String.format(Locale.US,"%.1f×",z).replace(".0×","×") else when(v) { 0.6f -> "0.6"; 1f -> "1"; else -> "3" } }
+        if(recording==null) { liveChip.text="● LIVE"; liveChip.setTextColor(C_TEXT) }
+        videoBtn.recording=recording!=null; videoBtn.contentDescription=if(recording!=null) "録画を停止" else "動画"
         updateRearUi()
     }
     private fun zoomTo(value:Float) {
@@ -503,7 +510,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 when(event) {
                     is VideoRecordEvent.Start -> { refreshInfo(); setBusy(true); showBanner("${lensName(camera?.cameraInfo?.zoomState?.value?.zoomRatio ?: 1f)} · 録画開始${if(withAudio) "" else "（無音）"}",1500) }
                     is VideoRecordEvent.Status -> { val sec=event.recordingStats.recordedDurationNanos/1_000_000_000
-                        liveChip.text="● REC ${sec/60}:${(sec%60).toString().padStart(2,'0')}"; liveChip.background=round(C_REC,12); liveChip.setTextColor(C_ACTIVE_TEXT) }
+                        liveChip.text="● REC ${sec/60}:${(sec%60).toString().padStart(2,'0')}"; liveChip.setTextColor(C_REC) }
                     is VideoRecordEvent.Finalize -> {
                         recording=null; videoBtn.isEnabled=true; setBusy(false)
                         if(!event.hasError()) { saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
@@ -730,8 +737,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun updateRearUi() {
         if(!::rearChip.isInitialized) return
         val active=rearSession!=null || areaStatus==WindowAreaCapability.Status.WINDOW_AREA_STATUS_ACTIVE
-        rearChip.text=when { active -> "内画面に戻る"; rearRequested -> "外画面へ切替中…"; else -> "外画面で自撮り" }
-        setActive(rearChip,active)
+        rearChip.contentDescription=when { active -> "内画面に戻る"; rearRequested -> "外画面へ切替中"; else -> "外画面で自撮り" }; rearChip.tooltipText=rearChip.contentDescription
+        rearChip.active=active
         // 外画面に移っている間は、戻るボタンを常に出す
         rearChip.visibility=if(hudShown || active || rearRequested) View.VISIBLE else View.GONE
         rearChip.isEnabled=recording==null && !photoBusy && countDown==null && !rearRequested
@@ -846,8 +853,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun updateCoverUi() {
         if(!::coverChip.isInitialized) return
         val on=coverSession!=null
-        coverChip.text=when { on -> "外画面 ON"; coverRequested -> "外画面…"; else -> "外画面 OFF" }
-        setActive(coverChip,on)
+        coverChip.active=on; coverChip.alpha=if(coverRequested) 0.5f else 1f
     }
     private fun tallAspect()=aspect=="9:16" || aspect=="フル"
     private fun chooseAspect() {
@@ -1014,8 +1020,8 @@ class ShutterButton(context:Context, private val kind:Int):View(context) {
         val d=resources.displayMetrics.density; val cx=width/2f; val cy=height/2f; val r=minOf(width,height)/2f
         val a=if(isEnabled) 255 else 90
         if(kind==SCAN) {
-            paint.style=Paint.Style.FILL; paint.color=Color.argb(a*230/255,27,45,36); c.drawCircle(cx,cy,r-d,paint)
-            paint.style=Paint.Style.STROKE; paint.strokeWidth=2*d; paint.color=Color.argb(a,214,234,176)
+            paint.style=Paint.Style.FILL; paint.color=Color.argb(a*70/255,0,0,0); c.drawCircle(cx,cy,r-d,paint)
+            paint.style=Paint.Style.STROKE; paint.strokeWidth=2*d; paint.color=Color.argb(a,255,255,255); c.drawCircle(cx,cy,r-1.5f*d,paint)
             val w=r*0.42f; val h=r*0.56f; c.drawRoundRect(cx-w,cy-h,cx+w,cy+h,3*d,3*d,paint)
             c.drawLine(cx-w*0.55f,cy-h*0.3f,cx+w*0.55f,cy-h*0.3f,paint); c.drawLine(cx-w*0.55f,cy+h*0.1f,cx+w*0.55f,cy+h*0.1f,paint)
         } else {
@@ -1025,6 +1031,61 @@ class ShutterButton(context:Context, private val kind:Int):View(context) {
             if(kind==VIDEO && recording) { val s=r*0.42f; c.drawRoundRect(cx-s,cy-s,cx+s,cy+s,6*d,6*d,paint) } else c.drawCircle(cx,cy,r-7*d,paint)
         }
         if(isPressed) { paint.style=Paint.Style.FILL; paint.color=Color.argb(60,0,0,0); c.drawCircle(cx,cy,r,paint) }
+    }
+}
+
+/** モノクロの線アイコン（24 マスの座標で描く）。active は下に点、badge は小さな文字 */
+class IconButton(context:Context, private val kind:String):View(context) {
+    var active=false; set(v) { field=v; invalidate() }
+    var badge:String?=null; set(v) { field=v; invalidate() }
+    var variant:String=""; set(v) { field=v; invalidate() }
+    private val d=resources.displayMetrics.density
+    private val p=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.STROKE; strokeCap=Paint.Cap.ROUND; strokeJoin=Paint.Join.ROUND; color=Color.WHITE }
+    private val f=Paint(Paint.ANTI_ALIAS_FLAG).apply { style=Paint.Style.FILL; color=Color.WHITE }
+    private val t=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.WHITE; textAlign=Paint.Align.CENTER; typeface=Typeface.DEFAULT_BOLD }
+    private var ox=0f; private var oy=0f
+    init { isClickable=true; isFocusable=true }
+    override fun drawableStateChanged() { super.drawableStateChanged(); invalidate() }
+    private fun x(v:Float)=ox+v*d
+    private fun y(v:Float)=oy+v*d
+    private fun line(a:Float,b:Float,c2:Float,e:Float,c:Canvas)=c.drawLine(x(a),y(b),x(c2),y(e),p)
+    private fun rect(l:Float,tp:Float,r:Float,b:Float,rad:Float,c:Canvas)=c.drawRoundRect(x(l),y(tp),x(r),y(b),rad*d,rad*d,p)
+    private fun text(s:String,cx:Float,cy:Float,size:Float,c:Canvas) { t.textSize=size*d; c.drawText(s,x(cx),y(cy)-(t.descent()+t.ascent())/2,t) }
+    override fun onDraw(c:Canvas) {
+        ox=(width-24*d)/2f; oy=(height-24*d)/2f
+        val a=if(isEnabled) 255 else 90
+        val sh=Color.argb(160,0,0,0)
+        for(paint in listOf(p,f,t)) { paint.alpha=a; paint.setShadowLayer(2.5f*d,0f,0.5f*d,sh) }
+        p.strokeWidth=1.7f*d
+        if(isPressed) { val bg=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.argb(55,255,255,255) }; c.drawCircle(width/2f,height/2f,20*d,bg) }
+        when(kind) {
+            "flash" -> {
+                val path=Path().apply { moveTo(x(13f),y(2.5f)); lineTo(x(5f),y(13.5f)); lineTo(x(11f),y(13.5f)); lineTo(x(10f),y(21.5f)); lineTo(x(18.5f),y(10f)); lineTo(x(12.5f),y(10f)); close() }
+                c.drawPath(path,p)
+                when(variant) { "off","" -> line(3.5f,3.5f,20.5f,20.5f,c); "auto" -> text("A",20f,19f,8f,c); "torch" -> text("T",20f,19f,8f,c) }
+            }
+            "timer" -> { c.drawCircle(x(12f),y(13.5f),8*d,p); line(10f,2.5f,14f,2.5f,c); line(18f,6.5f,19.5f,5f,c)
+                badge?.let { text(it,12f,13.8f,8.5f,c) } ?: line(12f,13.5f,12f,9f,c) }
+            "ev" -> { c.drawCircle(x(12f),y(12f),8.5f*d,p); line(12f,3.5f,12f,20.5f,c); line(6f,10f,10f,10f,c); line(8f,8f,8f,12f,c); line(14f,14f,18f,14f,c) }
+            "aspect" -> when(variant) {
+                "9:16" -> rect(7f,2.5f,17f,21.5f,1.5f,c); "1:1" -> rect(4.5f,4.5f,19.5f,19.5f,1.5f,c); "3:4" -> rect(6f,4f,18f,20f,1.5f,c)
+                else -> { for((sx,sy) in listOf(4f to 4f,20f to 4f,4f to 20f,20f to 20f)) { val dx=if(sx<12) 4f else -4f; val dy=if(sy<12) 4f else -4f; line(sx,sy,sx+dx,sy,c); line(sx,sy,sx,sy+dy,c) }; text("FULL",12f,12f,5.5f,c) } }
+            "mode" -> { val path=Path().apply { moveTo(x(10f),y(5f)); quadTo(x(11f),y(12f),x(18f),y(13f)); quadTo(x(11f),y(14f),x(10f),y(21f)); quadTo(x(9f),y(14f),x(2f),y(13f)); quadTo(x(9f),y(12f),x(10f),y(5f)); close() }
+                c.drawPath(path,p); line(19f,2.5f,19f,7.5f,c); line(16.5f,5f,21.5f,5f,c) }
+            "level" -> { line(2f,12f,8.5f,12f,c); line(15.5f,12f,22f,12f,c); c.drawCircle(x(12f),y(12f),2.6f*d,p) }
+            "grid" -> { rect(3.5f,3.5f,20.5f,20.5f,1.5f,c); line(9.2f,3.5f,9.2f,20.5f,c); line(14.8f,3.5f,14.8f,20.5f,c); line(3.5f,9.2f,20.5f,9.2f,c); line(3.5f,14.8f,20.5f,14.8f,c) }
+            "quality","fps" -> { rect(2f,6f,22f,18f,2.5f,c); text(variant,12f,12f,if(variant.length>=3) 6.5f else 7.5f,c) }
+            "settings" -> { p.strokeWidth=2.6f*d; for(i in 0 until 8) { val ang=Math.toRadians(i*45.0); line(12f+6.6f*cos(ang).toFloat(),12f+6.6f*sin(ang).toFloat(),12f+9.2f*cos(ang).toFloat(),12f+9.2f*sin(ang).toFloat(),c) }
+                p.strokeWidth=1.7f*d; c.drawCircle(x(12f),y(12f),6.6f*d,p); c.drawCircle(x(12f),y(12f),2.6f*d,p) }
+            "cover" -> { rect(3f,3f,13f,21f,2f,c); rect(15.5f,5.5f,21f,18.5f,1.5f,c); c.drawCircle(x(8f),y(12f),2.2f*d,p) }
+            "rear" -> { rect(6.5f,2.5f,17.5f,21.5f,2.5f,c); rect(8.5f,4.5f,13.5f,13.5f,2f,c)
+                c.drawCircle(x(11f),y(6.8f),1.1f*d,f); c.drawCircle(x(11f),y(9.3f),1.1f*d,f); c.drawCircle(x(11f),y(11.6f),1.1f*d,f) }
+            "hud" -> { for((yy,kx) in listOf(6.5f to 15f,12f to 8f,17.5f to 17f)) { line(3f,yy,21f,yy,c); c.drawCircle(x(kx),y(yy),2.3f*d,f) } }
+            "flip" -> { c.drawArc(x(5f),y(5f),x(19f),y(19f),200f,130f,false,p); c.drawArc(x(5f),y(5f),x(19f),y(19f),20f,130f,false,p)
+                line(17.6f,6.6f,18.4f,9.6f,c); line(18.4f,9.6f,15.4f,9.4f,c); line(6.4f,17.4f,5.6f,14.4f,c); line(5.6f,14.4f,8.6f,14.6f,c) }
+        }
+        badge?.takeIf { kind!="timer" }?.let { text(it,12f,26.5f,6.5f,c) }
+        if(active && (badge==null || kind=="timer")) c.drawCircle(width/2f,oy+27f*d,1.6f*d,f)
     }
 }
 
