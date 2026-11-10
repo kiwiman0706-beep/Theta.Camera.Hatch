@@ -52,6 +52,14 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private var imageCapture: ImageCapture? = null
     private var videoCapture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
+    /** スローモーションを Camera2 で直接撮っているとき（CameraX の高速度撮影が使えない端末） */
+    private var slow: SlowMotion? = null
+    private lateinit var slowView: TextureView
+    private var slowClosedOnStop = false
+    private var slowFolder = "未整理"; private var slowEvent: String? = null
+    private val slowTick = object : Runnable { override fun run() { val s=slow ?: return; if(!s.recording) return
+        val sec=(System.currentTimeMillis()-s.startedAt)/1000; liveChip.text="● REC ${sec/60}:${(sec%60).toString().padStart(2,'0')}"; liveChip.setTextColor(C_REC); handler.postDelayed(this,500) } }
+    private val isRecording get() = recording!=null || slow?.recording==true
     private var photoBusy = false
     private var countDown: CountDownTimer? = null
     private var selectedId: String? = null
@@ -76,7 +84,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private var slowFps = 0          // 120・240 ならスローモーション（高速度撮影）
     private var sceneHdr = false     // Camera2 のシーンモード HDR
     private var lowLight = false     // 暗所ブースト（OS が対応していれば）
-    private val voice by lazy { VoiceShutter(this) { if(recording==null) { showBanner("「はいチーズ」",800); onPhoto() } } }
+    private val voice by lazy { VoiceShutter(this) { if(!isRecording) { showBanner("「はいチーズ」",800); onPhoto() } } }
     private var voiceOn = false
     private lateinit var voiceChip: IconButton
     private lateinit var thumbStrip: LinearLayout
@@ -178,7 +186,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     private val microphone = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) message("マイク未許可のため、動画は無音で保存します")
-        if (pendingVideo && recording == null && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { pendingVideo = false; startRecording() }
+        if (pendingVideo && !isRecording && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) { pendingVideo = false; startRecording() }
     }
     private val scanLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
         if (r.resultCode != RESULT_OK) return@registerForActivityResult
@@ -217,7 +225,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 if (angle == ORIENTATION_UNKNOWN) return
                 val q = when (angle) { in 45..134 -> 90; in 135..224 -> 180; in 225..314 -> 270; else -> 0 }
                 if (q != deviceAngle) { deviceAngle = q; updateFlexOrientation(); rotateUi() }
-                if (recording != null) return
+                if (isRecording) return
                 val rotation = when (angle) { in 45..134 -> Surface.ROTATION_270; in 135..224 -> Surface.ROTATION_180; in 225..314 -> Surface.ROTATION_90; else -> Surface.ROTATION_0 }
                 imageCapture?.targetRotation = rotation
                 videoCapture?.targetRotation = rotation
@@ -260,7 +268,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         preview=PreviewView(this).apply { implementationMode=PreviewView.ImplementationMode.COMPATIBLE; scaleType=PreviewView.ScaleType.FILL_CENTER; setBackgroundColor(C_BG) }
         overlay=GuideView(this).apply { grid=prefs.getBoolean("grid",false); level=prefs.getBoolean("level",false) }
         stage=FrameLayout(this)
-        stage.addView(preview,FrameLayout.LayoutParams(-1,-1)); stage.addView(overlay,FrameLayout.LayoutParams(-1,-1))
+        slowView=TextureView(this).apply { visibility=View.GONE; addOnLayoutChangeListener { _,_,_,_,_,_,_,_,_ -> slow?.applyTransform() } }
+        stage.addView(preview,FrameLayout.LayoutParams(-1,-1)); stage.addView(slowView,FrameLayout.LayoutParams(-1,-1)); stage.addView(overlay,FrameLayout.LayoutParams(-1,-1))
         root.addView(stage,FrameLayout.LayoutParams(-1,-1,Gravity.CENTER))
         root.addOnLayoutChangeListener { _,l,t,r,b,ol,ot,or2,ob -> if(r-l!=or2-ol || b-t!=ob-ot) layoutStage() }
         ui=FrameLayout(this); root.addView(ui,FrameLayout.LayoutParams(-1,-1))
@@ -278,7 +287,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         gridChip=icon("grid","グリッド") { overlay.grid=!overlay.grid; prefs.edit().putBoolean("grid",overlay.grid).apply(); overlay.invalidate(); refreshInfo() }
         qualityChip=icon("quality","動画の画質") { showVideoSettings() }
         voiceChip=icon("voice","声シャッター（はいチーズ）") { setVoice(!voiceOn) }
-        fpsChip=icon("fps","フレームレート・スロー") { if(recording!=null) { message("録画中は変更できません"); return@icon }
+        fpsChip=icon("fps","フレームレート・スロー") { if(isRecording) { message("録画中は変更できません"); return@icon }
             val opts=fpsOptions(); val cur=if(slowFps>0) slowFps else if(sixtyFps) 60 else 30
             val next=opts[(opts.indexOf(cur)+1)%opts.size]
             sixtyFps=next==60; slowFps=if(next>=120) next else 0
@@ -310,7 +319,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 setOnClickListener { if(facing!=CameraSelector.LENS_FACING_BACK) { facing=CameraSelector.LENS_FACING_BACK; selectedId=null; resetManual(); bindCamera() }; zoomTo(z) }
                 layoutParams=LinearLayout.LayoutParams(dp(40),dp(40)).apply { setMargins(dp(3),0,dp(3),0) } }
             zoomChips.add(z to c); rotatables.add(c); zoomPill.addView(c) }
-        zoomPill.addView(icon("flip","前後のカメラを切り替え") { if(recording!=null) { message("録画中は切り替えられません"); return@icon }
+        zoomPill.addView(icon("flip","前後のカメラを切り替え") { if(isRecording) { message("録画中は切り替えられません"); return@icon }
             facing=if(facing==CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
             selectedId=null; resetManual(); bindCamera() })
         photoBtn=ShutterButton(this,ShutterButton.PHOTO); videoBtn=ShutterButton(this,ShutterButton.VIDEO); scanBtn=ShutterButton(this,ShutterButton.SCAN)
@@ -485,7 +494,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 background=GradientDrawable().apply { cornerRadius=dp(18).toFloat(); setColor(if(filtered) Color.argb(110,255,255,255) else Color.argb(40,0,0,0)); setStroke(dp(1),if(cur) Color.WHITE else Color.argb(120,255,255,255)) }
                 contentDescription="$f（長押しで保存先にする）"
                 setOnClickListener { stripFilter=if(stripFilter==f) null else f; buildFolderRow(); refreshStrip() }
-                setOnLongClickListener { saveFolder=f; prefs.edit().putString("saveFolder",f).apply(); showBanner("これから撮るものは「$f」に保存${if(recording!=null) "（録画中の動画は開始時のフォルダ）" else ""}",2000); buildFolderRow(); true }
+                setOnLongClickListener { saveFolder=f; prefs.edit().putString("saveFolder",f).apply(); showBanner("これから撮るものは「$f」に保存${if(isRecording) "（録画中の動画は開始時のフォルダ）" else ""}",2000); buildFolderRow(); true }
             },LinearLayout.LayoutParams(-2,dp(36)).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) })
         }
         folderRow.addView(icon("plus","フォルダを追加") { addFolder() })
@@ -502,7 +511,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         if(on && !voice.available()) { message("この端末では音声認識が使えません"); return }
         if(on && ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED) { permissions.launch(arrayOf(Manifest.permission.RECORD_AUDIO)); return }
         voiceOn=on; prefs.edit().putBoolean("voice",on).apply()
-        if(on && recording==null) voice.start() else voice.stop()
+        if(on && !isRecording) voice.start() else voice.stop()
         if(on) showBanner("「はいチーズ」で写真を撮ります",1800)
         refreshInfo()
     }
@@ -526,10 +535,11 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         ?: CameraSelector.Builder().requireLensFacing(facing).build()
     private fun bindCamera(fallback:Boolean=false) {
         val p=provider ?: return
-        if(recording!=null || photoBusy || countDown!=null || !hasCamera()) return
+        if(isRecording || photoBusy || countDown!=null || !hasCamera()) return
         camera?.cameraInfo?.zoomState?.removeObservers(this)
         camera?.cameraInfo?.cameraState?.removeObservers(this)
         p.unbindAll(); camera=null; imageCapture=null; videoCapture=null
+        closeSlow()
         try {
             var selector=baseSelector()
             if (!p.hasCamera(selector)) { selectedId=null; facing=CameraSelector.LENS_FACING_BACK; selector=baseSelector() }
@@ -551,9 +561,13 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             val pv=pb.build().also { it.setSurfaceProvider(preview.surfaceProvider) }
             if(slowFps>0) {
                 // スローモーション：高速度撮影の専用セッション（写真は撮れない）
-                val hs=Recorder.getHighSpeedVideoCapabilities(baseInfo) ?: error("このレンズはスローモーション非対応です")
-                val hq=hs.getSupportedQualities(DynamicRange.SDR)
-                val q=hq.firstOrNull { it==Quality.FHD } ?: hq.firstOrNull() ?: error("このレンズはスローモーション非対応です")
+                val hq=runCatching { Recorder.getHighSpeedVideoCapabilities(baseInfo)?.getSupportedQualities(DynamicRange.SDR) }.getOrNull().orEmpty()
+                val q=hq.firstOrNull { it==Quality.FHD } ?: hq.firstOrNull()
+                if(q==null) {
+                    // CameraX は端末の高速度用プロファイルが無いと使えない（Fold5 など）。Camera2 で直接撮る
+                    startSlow(Camera2CameraInfo.from(baseInfo).cameraId)
+                    setBusy(false); refreshInfo(); return
+                }
                 val vc=VideoCapture.Builder(Recorder.Builder().setQualitySelector(QualitySelector.from(q)).build()).setTargetRotation(preview.display?.rotation ?: Surface.ROTATION_0).build()
                 videoCapture=vc; imageCapture=null
                 camera=p.bindToLifecycle(this,selector,HighSpeedVideoSessionConfig.Builder(vc).setPreview(pv).setFrameRateRange(Range(slowFps,slowFps)).setSlowMotionEnabled(true).build())
@@ -610,13 +624,50 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             setBusy(false); refreshInfo()
             if(pendingVideo) { pendingVideo=false; onVideo() } else tryAutoRear()
         } catch(e:Exception) {
-            lastError="バインド失敗: ${e.message}"
+            closeSlow()
+            lastError="バインド失敗: ${e.message}"; noteError(lastError)
             if(!fallback) {
                 extensionMode=ExtensionMode.NONE; videoOnly=false; slowFps=0; sceneHdr=false; lowLight=false; highResolution=false; ultraHdr=false; rawJpeg=false; videoHdr=false; sixtyFps=false; stabilization=false; quality=Quality.FHD; selectedId=null; facing=CameraSelector.LENS_FACING_BACK; resetManual()
                 message("この撮影設定を利用できないため、標準設定で再接続します")
                 bindCamera(true)
             } else { pendingVideo=false; fail("カメラ接続（設定の端末診断を確認してください）",e) }
         }
+    }
+    /** スローモーションを Camera2 で始める（プレビューは slowView。写真・音声なし） */
+    private fun startSlow(cameraId:String) {
+        val s=SlowMotion(this,cameraId,slowFps,slowView,{ preview.display?.rotation ?: Surface.ROTATION_0 }) { msg ->
+            // 開けなかったら標準に戻す
+            if(slow==null) return@SlowMotion
+            closeSlow(); lastError=msg; noteError(msg); slowFps=0; pendingVideo=false
+            message("$msg。標準の動画に戻します"); bindCamera()
+        }
+        slow=s; slowView.visibility=View.VISIBLE; preview.visibility=View.INVISIBLE
+        s.onReady={ if(pendingVideo) { pendingVideo=false; onVideo() } }
+        s.open()
+    }
+    private fun closeSlow() {
+        val s=slow ?: return
+        handler.removeCallbacks(slowTick)
+        if(s.recording) runCatching { finishSlow(s) }
+        slow=null; s.close()
+        if(::slowView.isInitialized) { slowView.visibility=View.GONE; preview.visibility=View.VISIBLE }
+    }
+    private fun startSlowRecording(s:SlowMotion) {
+        try {
+            videoName=name()+".mp4"; slowFolder=saveFolder; slowEvent=currentEvent
+            s.start(videoName,saveDir())
+            recordStartedAt=s.startedAt; voice.stop(); setBusy(true); refreshInfo(); handler.post(slowTick)
+            showBanner("スローモーション ${s.fps}fps · 録画開始（無音・${s.fps/SlowMotion.PLAYBACK_FPS}倍のスロー）",1500)
+        } catch(e:Exception) { setBusy(false); videoBtn.isEnabled=true; fail("スローモーション録画開始",e); refreshInfo() }
+    }
+    private fun finishSlow(s:SlowMotion) {
+        handler.removeCallbacks(slowTick)
+        try {
+            val uri=s.stop()
+            if(uri!=null) { meta.create(uri,videoName,slowFolder,slowEvent); saveLast(uri,true); updateThumb(); showBanner("スローモーションを保存しました",1500) }
+        } catch(e:Exception) { fail("スローモーション保存",e) }
+        if(voiceOn) voice.start()
+        videoBtn.isEnabled=true; setBusy(false); refreshInfo()
     }
     private fun fail(where:String,e:Exception) { lastError="$where: ${e.cause?.message ?: e.message}"; noteError(lastError); message(lastError) }
     private fun noteError(s:String) { android.util.Log.e(app.thetahatch.adb.AdbBridge.TAG,s); recentErrors.addLast("${SimpleDateFormat("HH:mm:ss",Locale.US).format(Date())} $s"); while(recentErrors.size>10) recentErrors.removeFirst() }
@@ -643,8 +694,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         zoomChips.forEach { (v,c) -> val on=v==near && facing==CameraSelector.LENS_FACING_BACK
             c.background=if(on) GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(70,0,0,0)); setStroke(dp(1),Color.WHITE) } else null
             c.text=if(on) String.format(Locale.US,"%.1f×",z).replace(".0×","×") else when(v) { 0.6f -> "0.6"; 1f -> "1"; else -> "3" } }
-        if(recording==null) { liveChip.text="● LIVE"; liveChip.setTextColor(C_TEXT) }
-        videoBtn.recording=recording!=null; videoBtn.contentDescription=if(recording!=null) "録画を停止" else "動画"
+        if(!isRecording) { liveChip.text="● LIVE"; liveChip.setTextColor(C_TEXT) }
+        videoBtn.recording=isRecording; videoBtn.contentDescription=if(isRecording) "録画を停止" else "動画"
         updateRearUi()
     }
     private fun zoomTo(value:Float) {
@@ -654,16 +705,17 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     private fun setBusy(busy:Boolean) {
         if(!::photoBtn.isInitialized) return
-        photoBtn.isEnabled=!photoBusy; scanBtn.isEnabled=!busy && recording==null
+        photoBtn.isEnabled=!photoBusy; scanBtn.isEnabled=!busy && !isRecording
         modeChip.isEnabled=!busy; settingsChip.isEnabled=!busy
     }
     private fun onPhoto() {
         if(photoBusy) return
         if(countDown!=null) { countDown?.cancel(); countDown=null; message("タイマーを中止しました"); return }
         if(!hasCamera()) { permissions.launch(startPermissions()); return }
+        if(slow!=null) { message("スローモーション中は写真を撮れません（fps を 30 に戻すと撮れます）"); return }
         if(camera==null) { startProvider(); return }
         if(imageCapture==null) { message(if(slowFps>0) "スローモーション中は写真を撮れません（fps を 30 に戻すと撮れます）" else "この端末では録画中の写真に対応していません"); return }
-        if(timerSeconds>0 && recording==null) {
+        if(timerSeconds>0 && !isRecording) {
             countDown=object:CountDownTimer(timerSeconds*1000L,250){
                 override fun onTick(ms:Long){ showBanner("${ceil(ms/1000.0).toInt()} 秒後に撮影（写真をもう一度押すと中止）",600) }
                 override fun onFinish(){ countDown=null; takePhoto() }
@@ -671,7 +723,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         } else takePhoto()
     }
     private fun onVideo() {
-        if(recording!=null) { recording?.stop(); videoBtn.isEnabled=false; return }
+        slow?.let { s -> if(s.recording) finishSlow(s) else if(s.ready) startSlowRecording(s) else pendingVideo=true; return }
+        if(isRecording) { recording?.stop(); videoBtn.isEnabled=false; return }
         if(!hasCamera()) { permissions.launch(startPermissions()); return }
         if(camera==null) { pendingVideo=true; startProvider(); return }
         if(countDown!=null) { countDown?.cancel(); countDown=null }
@@ -687,7 +740,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private fun name()="Theta_"+SimpleDateFormat("yyyyMMdd_HHmmss_SSS",Locale.US).format(Date())
     private fun takePhoto() {
         val cap=imageCapture ?: return
-        photoBusy=true; setBusy(recording!=null)
+        photoBusy=true; setBusy(isRecording)
         preview.animate().alpha(0.35f).setDuration(60).withEndAction { preview.animate().alpha(1f).setDuration(160).start() }.start()
         val basename=name()
         fun output(ext:String,mime:String)=ImageCapture.OutputFileOptions.Builder(contentResolver,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
@@ -696,7 +749,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val pair=cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG
         if(heifClap && !pair) { takeHeif(cap,basename); return }
         var saved=0; var failed=false
-        fun finish() {photoBusy=false;setBusy(recording!=null);refreshInfo();tryAutoRear()}
+        fun finish() {photoBusy=false;setBusy(isRecording);refreshInfo();tryAutoRear()}
         val callback=object:ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(result:ImageCapture.OutputFileResults) {
                 if(result.imageFormat==ImageFormat.JPEG || !pair) { result.savedUri?.let { meta.create(it,basename+".jpg",saveFolder,currentEvent) }; saveLast(result.savedUri,false); updateThumb() }
@@ -719,7 +772,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val viewW=stage.width; val viewH=stage.height
         val dispRot=runCatching { camera!!.cameraInfo.getSensorRotationDegrees(preview.display?.rotation ?: Surface.ROTATION_0) }.getOrDefault(90)
         val folder=saveFolder; val event=currentEvent; val dir=saveDir()
-        fun done() { photoBusy=false; setBusy(recording!=null); refreshInfo(); tryAutoRear() }
+        fun done() { photoBusy=false; setBusy(isRecording); refreshInfo(); tryAutoRear() }
         try {
             cap.takePicture(main,object:ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(img:ImageProxy) {
@@ -791,7 +844,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private fun modeName(m:Int)=when(m){ExtensionMode.AUTO->"メーカー自動";ExtensionMode.HDR->"HDR";ExtensionMode.NIGHT->"夜景";ExtensionMode.BOKEH->"ポートレート";ExtensionMode.FACE_RETOUCH->"美肌";else->"標準"}
     private fun qualityName(q:Quality)=when(q){Quality.UHD->"4K";Quality.FHD->"1080p";Quality.HD->"720p";Quality.SD->"SD";else->q.toString()}
     private fun showModes() {
-        if(recording!=null) { message("録画中は変更できません"); return }
+        if(isRecording) { message("録画中は変更できません"); return }
         val ext=listOf(ExtensionMode.AUTO,ExtensionMode.HDR,ExtensionMode.NIGHT,ExtensionMode.BOKEH,ExtensionMode.FACE_RETOUCH).filter { runCatching {extensions?.isExtensionAvailable(baseSelector(),it)==true}.getOrDefault(false) }
         val items=mutableListOf<Pair<String,()->Unit>>("標準" to { extensionMode=ExtensionMode.NONE; sceneHdr=false; lowLight=false })
         if(characteristics()?.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES)?.contains(CaptureRequest.CONTROL_SCENE_MODE_HDR)==true)
@@ -845,7 +898,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         choose("設定",items.map { it.first }) { items[it].second(); refreshInfo() }
     }
     private fun startScan() {
-        if(recording!=null) { message("録画中はスキャンできません"); return }
+        if(isRecording) { message("録画中はスキャンできません"); return }
         val opts=com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder()
             .setGalleryImportAllowed(true)
             .setResultFormats(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG,com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF)
@@ -929,7 +982,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         }
     }
     private fun resetManual() {manualIso=null;manualTime=null;focusDistance=null;wb=CaptureRequest.CONTROL_AWB_MODE_AUTO}
-    private fun characteristics():CameraCharacteristics? = runCatching {(getSystemService(CAMERA_SERVICE) as CameraManager).getCameraCharacteristics(Camera2CameraInfo.from(camera!!.cameraInfo).cameraId)}.getOrNull()
+    private fun characteristics():CameraCharacteristics? = runCatching {(getSystemService(CAMERA_SERVICE) as CameraManager).getCameraCharacteristics(slow?.cameraId ?: Camera2CameraInfo.from(camera!!.cameraInfo).cameraId)}.getOrNull()
     private fun showPro() {
         if(extensionMode!=ExtensionMode.NONE) {message("PRO調整は標準モードで使用してください");return}
         val cc=characteristics() ?: return
@@ -1011,7 +1064,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     private fun tryAutoRear() {
         if(!pendingAutoRear || !autoRear || rearRequested || rearSession!=null) return
-        if(camera==null || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || recording!=null || photoBusy || countDown!=null) return
+        if(camera==null || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) || isRecording || photoBusy || countDown!=null) return
         if((lastAngle ?: 0f)<155f) return
         val remaining=pendingRearAt-SystemClock.elapsedRealtime()
         if(remaining>0){handler.removeCallbacks(rearCheck);handler.postDelayed(rearCheck,remaining);return}
@@ -1024,7 +1077,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         rearChip.active=active
         // 外画面に移っている間は、戻るボタンを常に出す
         rearChip.visibility=if(hudShown || active || rearRequested) View.VISIBLE else View.GONE
-        rearChip.isEnabled=recording==null && !photoBusy && countDown==null && !rearRequested
+        rearChip.isEnabled=!isRecording && !photoBusy && countDown==null && !rearRequested
     }
     private fun toggleRear() {
         pendingAutoRear=false
@@ -1035,7 +1088,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         startRear()
     }
     private fun startRear() {
-        if(recording!=null || photoBusy || countDown!=null) {message("撮影・保存が終わってから切り替えてください");return}
+        if(isRecording || photoBusy || countDown!=null) {message("撮影・保存が終わってから切り替えてください");return}
         val info=areaInfo
         if(info==null || areaStatus!=WindowAreaCapability.Status.WINDOW_AREA_STATUS_AVAILABLE) {
             message(if(areaStatus==WindowAreaCapability.Status.WINDOW_AREA_STATUS_UNSUPPORTED) "外側画面のAPIが使えません。OSを更新し、診断結果を確認してください" else "現在は外側画面へ切替できません。本体を開いて再試行してください")
@@ -1142,7 +1195,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     private fun tallAspect()=aspect=="9:16" || aspect=="フル"
     private fun chooseAspect() {
-        if(recording!=null) { message("録画中は変更できません"); return }
+        if(isRecording) { message("録画中は変更できません"); return }
         val list=listOf("3:4","9:16","1:1","フル")
         choose("比率（見えている範囲で保存）",list) { aspect=list[it]; prefs.edit().putString("aspect",aspect).apply(); layoutStage(force=true); refreshInfo() }
     }
@@ -1161,7 +1214,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val old=stage.layoutParams as FrameLayout.LayoutParams
         if(!force && old.width==w && old.height==h && old.gravity==g) return
         stage.layoutParams=FrameLayout.LayoutParams(w,h,g)
-        if(camera!=null && recording==null) stage.post { bindCamera() }
+        if(camera!=null && !isRecording) stage.post { bindCamera() }
     }
     /** 半分に折って横向きの折り目があれば、上半分を映像・下半分を操作にする（Flex モード） */
     // ===== ADB の窓口（テスト・PC からの操作用） =====
@@ -1172,10 +1225,10 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         return J().put("app","camera").put("packageName",packageName).put("versionName",BuildConfig.VERSION_NAME).put("versionCode",BuildConfig.VERSION_CODE)
             .put("resumed",lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
             .put("permissionsMissing",org.json.JSONArray(missing))
-            .put("camera",J().put("bound",camera!=null).put("facing",if(facing==CameraSelector.LENS_FACING_BACK) "back" else "front")
+            .put("camera",J().put("bound",camera!=null || slow?.ready==true).put("slowEngine",when { slow!=null -> "camera2"; slowFps>0 -> "camerax"; else -> JSONObjectNull }).put("facing",if(facing==CameraSelector.LENS_FACING_BACK) "back" else "front")
                 .put("zoom",z?.zoomRatio?.toDouble() ?: JSONObjectNull).put("zoomRange",z?.let { "${it.minZoomRatio}-${it.maxZoomRatio}" } ?: JSONObjectNull)
                 .put("lens",lensName(z?.zoomRatio ?: 1f)).put("photoReady",imageCapture!=null).put("videoReady",videoCapture!=null)
-                .put("recording",recording!=null).put("recordSeconds",if(recording!=null) (System.currentTimeMillis()-recordStartedAt)/1000 else 0)
+                .put("recording",isRecording).put("recordSeconds",if(isRecording) (System.currentTimeMillis()-recordStartedAt)/1000 else 0)
                 .put("photoBusy",photoBusy).put("burst",burstActive).put("timerRunning",countDown!=null)
                 .put("mode",modeKey()).put("raw",rawJpeg).put("aspect",aspect).put("quality",qualityName(quality)).put("videoHdr",videoHdr)
                 .put("fps",if(slowFps>0) slowFps else if(sixtyFps) 60 else 30).put("slowMotion",slowFps>0)
@@ -1196,7 +1249,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         fun ok(msg:String="accepted")=0 to org.json.JSONObject().put("ok",true).put("result",msg)
         fun bad(msg:String)=1 to org.json.JSONObject().put("error",msg)
         val v=extras.getString("value") ?: extras.getString("action") ?: ""
-        if(recording!=null && command in setOf("MODE","FPS","ASPECT","FACING","REBIND")) return bad("recording")
+        if(isRecording && command in setOf("MODE","FPS","ASPECT","FACING","REBIND")) return bad("recording")
         return when(command) {
             "STATUS" -> 0 to adbStatus()
             "GET" -> { val k=extras.getString("key") ?: return bad("key required"); 0 to org.json.JSONObject().put("key",k).put("value",prefs.all[k] ?: JSONObjectNull) }
@@ -1217,14 +1270,18 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             "CHECK_UPDATE" -> { checkUpdate(manual=true); ok() }
             "PHOTO" -> { onPhoto(); ok() }
             "BURST" -> { val n=(extras.getString("count") ?: v).toIntOrNull()?.coerceIn(1,100) ?: 5; burstLimit=n; startBurst(); ok("burst $n") }
-            "VIDEO" -> { when(v) { "start" -> if(recording==null) onVideo(); "stop" -> if(recording!=null) onVideo(); else -> onVideo() }; ok() }
+            "VIDEO" -> { when(v) { "start" -> if(!isRecording) onVideo(); "stop" -> if(isRecording) onVideo(); else -> onVideo() }; ok() }
             "ZOOM" -> { val z=v.toFloatOrNull() ?: return bad("value=zoom ratio"); zoomTo(z); ok("zoom $z") }
             "FACING" -> { facing=if(v=="front") CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK; selectedId=null; resetManual(); bindCamera(); ok(v) }
-            "MODE" -> { extensionMode=ExtensionMode.NONE; sceneHdr=false; lowLight=false
+            "MODE" -> { if(v=="lowlight" && camera?.cameraInfo?.isLowLightBoostSupported!=true) return bad("unsupported: low-light boost")
+                extensionMode=ExtensionMode.NONE; sceneHdr=false; lowLight=false
                 when(v) { "standard" -> {}; "hdr" -> sceneHdr=true; "lowlight" -> lowLight=true; "auto" -> extensionMode=ExtensionMode.AUTO; "bokeh" -> extensionMode=ExtensionMode.BOKEH; "face" -> extensionMode=ExtensionMode.FACE_RETOUCH; else -> return bad("value: standard|hdr|lowlight|auto|bokeh|face") }
                 if(extensionMode!=ExtensionMode.NONE) slowFps=0; resetManual(); bindCamera(); refreshInfo(); ok(v) }
             "FPS" -> { val f=v.toIntOrNull() ?: return bad("value: 30|60|120|240"); if(f !in fpsOptions()) return bad("unsupported: ${fpsOptions()}")
-                sixtyFps=f==60; slowFps=if(f>=120) f else 0; bindCamera(); refreshInfo(); ok("$f") }
+                sixtyFps=f==60; slowFps=if(f>=120) f else 0; bindCamera(); refreshInfo()
+                // 接続できずに標準へ戻したときは失敗として返す
+                if(f>=120 && slowFps!=f) return bad("fallback: $lastError")
+                ok(if(slow!=null) "$f camera2" else "$f") }
             "ASPECT" -> { val a=if(v=="full") "フル" else v; if(a !in listOf("3:4","9:16","1:1","フル")) return bad("value: 3:4|9:16|1:1|full")
                 aspect=a; prefs.edit().putString("aspect",a).apply(); layoutStage(force=true); refreshInfo(); ok(v) }
             "EV" -> { val c=camera ?: return bad("camera not bound"); val e=v.toFloatOrNull() ?: return bad("value=EV")
@@ -1310,7 +1367,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     private fun finishBurst() { burstLimit=100; if(burstCount>0) { updateThumb(); showBanner("連写 $burstCount 枚を保存しました",1800) } }
     private fun onScan() {
-        if(recording!=null) { message("録画中はスキャンできません"); return }
+        if(isRecording) { message("録画中はスキャンできません"); return }
         choose("スキャン",listOf("書類（枠と傾きを自動で補正）","QR コード・バーコード")) { if(it==0) startScan() else startQr() }
     }
     private fun startQr() {
@@ -1380,22 +1437,23 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             .setNeutralButton("共有"){_,_->startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT,report),"診断テキストを共有"))}
             .setNegativeButton("閉じる",null).show()
     }
-    override fun onConfigurationChanged(newConfig:Configuration) {super.onConfigurationChanged(newConfig);root.post { arrangeUi() };preview.post {imageCapture?.targetRotation=preview.display.rotation;if(recording==null)videoCapture?.targetRotation=preview.display.rotation;tryAutoRear()} }
+    override fun onConfigurationChanged(newConfig:Configuration) {super.onConfigurationChanged(newConfig);root.post { arrangeUi(); slow?.applyTransform() };preview.post {imageCapture?.targetRotation=preview.display.rotation;if(!isRecording)videoCapture?.targetRotation=preview.display.rotation;tryAutoRear()} }
     override fun onResume() {
-        super.onResume(); if(voiceOn && recording==null) voice.start(); orientationListener?.enable()
+        super.onResume(); if(voiceOn && !isRecording) voice.start(); orientationListener?.enable()
         hinge?.let {sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_NORMAL)}
         sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_UI)}
         if(hinge==null && resources.configuration.screenWidthDp<500 && rearSession==null) updateAngle(0f)
         handler.postDelayed(rearCheck,800)
     }
-    override fun onPause() {super.onPause();voice.stop();orientationListener?.disable();sensors.unregisterListener(this);countDown?.cancel();countDown=null;if(!photoBusy && recording==null){setBusy(false);refreshInfo()} }
-    override fun onStop() {super.onStop();recording?.stop();handler.removeCallbacks(rearCheck);foldTrigger.reset()}
+    override fun onPause() {super.onPause();voice.stop();orientationListener?.disable();sensors.unregisterListener(this);countDown?.cancel();countDown=null;if(!photoBusy && !isRecording){setBusy(false);refreshInfo()} }
+    override fun onStop() {super.onStop();recording?.stop();if(slow!=null){closeSlow();slowClosedOnStop=true};handler.removeCallbacks(rearCheck);foldTrigger.reset()}
     override fun onStart() {
         super.onStart()
+        if(slowClosedOnStop) { slowClosedOnStop=false; if(slowFps>0) root.post { bindCamera() } }
         app.thetahatch.adb.AdbBridge.attach(this)
         runCatching { startService(Intent(this, app.thetahatch.adb.StatusService::class.java)) }
     }
-    override fun onDestroy() {app.thetahatch.adb.AdbBridge.detach(this);stopCover();countDown?.cancel();recording?.close();runCatching {rearSession?.close()};handler.removeCallbacksAndMessages(null);super.onDestroy()}
+    override fun onDestroy() {closeSlow();app.thetahatch.adb.AdbBridge.detach(this);stopCover();countDown?.cancel();recording?.close();runCatching {rearSession?.close()};handler.removeCallbacksAndMessages(null);super.onDestroy()}
     override fun onSensorChanged(e:SensorEvent) { when(e.sensor.type) {
         Sensor.TYPE_HINGE_ANGLE -> updateAngle(e.values[0])
         Sensor.TYPE_ACCELEROMETER -> {if(overlay.level){overlay.roll=(atan2(e.values[0],e.values[1])*180/Math.PI).toFloat();overlay.invalidate()}}

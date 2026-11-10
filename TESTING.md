@@ -142,7 +142,9 @@ Fold5（SC-55D）で確かめたら、ここから消していく。
 ## 実機で見つかった問題（0.13.1）
 
 - スローモーション 120／240fps が使えない：端末は高速度撮影（1920×1080・1280×720 で 120／240）に対応しているのに、`Recorder.getHighSpeedVideoCapabilities` が null で「このレンズはスローモーション非対応です」→ 標準設定で接続し直す。30fps の動画になる。ADB の `FPS 120` は ok を返し、状態の errors にも出ない（DIAG の Last error にだけ出る）
+  - 原因：Fold5 の `/vendor/etc/media_profiles*.xml` に高速度用プロファイル（highspeed）が 1 つも無い。CameraX の高速度撮影はこれを前提にしている
+  - 0.13.2（作業中、未リリース）：CameraX が使えないときは Camera2 の constrained high-speed セッション＋MediaRecorder（撮影 fps → 再生 30fps）で撮る `SlowMotion.kt` を足した。**実機ではまだ撮れていない**。1 回目はセッション（operatingMode=1）までは組めたが、最初のフレームで HAL がエラー（CamX の AWB で "Input tuning data is NULL"）→ 標準に戻った。プレビューも TEMPLATE_RECORD にそろえ、SessionConfiguration でセッションのパラメータを渡すよう直した版は、電池切れで未確認。これでも駄目なら Samsung 独自の設定が要る可能性があり、Fold5 ではスローをメニューに出さないことも考える
 - Google フォトで HEIF が横に引き伸ばされる（clap で切ったあと、全体の縦横比で表示している）。Samsung ギャラリーでは切れない
 - HEIF に Exif が入らない（HeifWriter で作り直すため。撮影日時は MediaStore の DATE_TAKEN だけ）
 - HEIF 保存のとき、連写の JPEG は画面どおりに切られず全体（フルなら 4000×2252）で保存される
-- ADB の `MODE lowlight` は非対応の端末でも ok を返す
+- ADB の `MODE lowlight` は非対応の端末でも ok を返す（0.13.2 で失敗を返すように直した。`FPS` も標準に戻ったときは失敗を返し、接続の失敗は errors に出す。実機未確認）
