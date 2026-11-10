@@ -13,8 +13,8 @@ android {
         applicationId = "app.thetahatch.camera"
         minSdk = 29
         targetSdk = 35
-        versionCode = 3
-        versionName = "0.3.0"
+        versionCode = 4
+        versionName = "0.4.0"
     }
     buildFeatures { buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -45,5 +45,6 @@ dependencies {
     implementation("androidx.camera:camera-video:$camera")
     implementation("androidx.camera:camera-extensions:$camera")
     implementation("androidx.window:window:1.4.0")
+    implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
     testImplementation("junit:junit:4.13.2")
 }
