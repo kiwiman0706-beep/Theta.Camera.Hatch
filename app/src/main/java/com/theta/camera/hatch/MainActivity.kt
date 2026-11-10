@@ -85,6 +85,15 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var folders = mutableListOf<String>()
     private var saveFolder = "未整理"
     private var stripFilter: String? = null
+    private val meta by lazy { MetaStore(this) }
+    private var currentEvent: String? = null
+    private var selectedUri: Uri? = null
+    private var searchQuery = ""
+    private var starOnly = false
+    private var videoName = ""
+    private lateinit var eventBtn: TextView
+    private lateinit var starBtn: IconButton
+    private lateinit var searchBtn: IconButton
     private var audioEnabled = true
     private var stabilization = true
     private var manualIso: Int? = null
@@ -181,6 +190,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         saveFolder = prefs.getString("saveFolder", "未整理") ?: "未整理"
         if(saveFolder !in folders) folders.add(saveFolder)
         voiceOn = prefs.getBoolean("voice", false)
+        currentEvent = prefs.getString("currentEvent", null)
         timerSeconds = prefs.getInt("timer", 0)
         audioEnabled = prefs.getBoolean("audio", true)
         lastUri = prefs.getString("lastUri", null)?.let(Uri::parse)
@@ -295,7 +305,14 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         shutterBar=LinearLayout(this).apply { gravity=Gravity.CENTER; addView(p); addView(v); addView(s) }
         thumbStrip=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
         folderRow=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL }
+        eventBtn=shadowText("",12f).apply { setPadding(dp(14),0,dp(14),0); minHeight=dp(36); maxWidth=dp(260); isSingleLine=true; ellipsize=android.text.TextUtils.TruncateAt.END
+            background=GradientDrawable().apply { cornerRadius=dp(18).toFloat(); setColor(Color.argb(60,0,0,0)); setStroke(dp(1),Color.argb(150,255,255,255)) }
+            contentDescription="イベント"; setOnClickListener { showEvents() } }
+        starBtn=icon("star","☆ お気に入り（選んだ写真）") { toggleStar() }
+        val infoBtn=icon("info","詳細・コメント・タグ（選んだ写真）") { showDetail() }
+        searchBtn=icon("search","探す（コメント・タグ・イベント・☆）") { showSearch() }
         stripBox=vcol(Gravity.START,
+            hrow(eventBtn,starBtn,infoBtn,searchBtn),
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(thumbStrip) },
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(folderRow) })
         bottomBox=vcol(Gravity.CENTER_HORIZONTAL,stripBox,evBar,zoomPill)
@@ -319,7 +336,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         hudShown=show; prefs.edit().putBoolean("hud",show).apply()
         val vis=if(show) View.VISIBLE else View.GONE
         hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; stripBox.visibility=vis; lastThumb.visibility=if(show) View.GONE else View.VISIBLE
-        if(show) { refreshStrip(); buildFolderRow() }
+        if(show) { refreshStrip(); buildFolderRow(); refreshInfoBar() }
         if(!show) evBar.visibility=View.GONE
         hudToggle.active=show
         updateRearUi()
@@ -339,9 +356,82 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             val bmp=withContext(Dispatchers.IO) { runCatching { contentResolver.loadThumbnail(uri,android.util.Size(dp(52),dp(52)),null) }.getOrNull() }
             lastThumb.setImageBitmap(bmp)
         }
-        if(::thumbStrip.isInitialized && hudShown) refreshStrip()
+        if(::thumbStrip.isInitialized && hudShown) { refreshStrip(); refreshInfoBar() }
     }
     private fun saveDir()="DCIM/ThetaCamera/$saveFolder"
+    /** 選んだ写真（無ければ直前に撮ったもの） */
+    private fun target():Uri? = selectedUri ?: lastUri
+    private fun refreshInfoBar() {
+        if(!::eventBtn.isInitialized) return
+        eventBtn.text=meta.event(currentEvent)?.let { "◆ "+meta.label(it) } ?: "イベントなし"
+        starBtn.active=target()?.let { meta.get(it)?.favorite }==true; starBtn.variant=if(starBtn.active) "on" else "off"
+        searchBtn.active=searchQuery.isNotBlank()||starOnly
+    }
+    private fun toggleStar() {
+        val u=target() ?: run { message("先に写真を撮るか、下のサムネイルを選んでください"); return }
+        val m=meta.ensure(u,saveFolder) ?: run { message("この写真には付けられません"); return }
+        m.favorite=!m.favorite; meta.changed(m)
+        showBanner(if(m.favorite) "☆ お気に入りにしました" else "お気に入りを外しました",1200)
+        refreshInfoBar(); refreshStrip()
+    }
+    /** イベント：撮影中に作る・選ぶ。選んだあとに撮るものに付く（CAM-018・019） */
+    private fun showEvents() {
+        val items=mutableListOf<Pair<String,()->Unit>>("イベントなし（記録だけ）" to { setEvent(null) })
+        meta.events.sortedByDescending { it.start }.forEach { e -> items+=(if(e.id==currentEvent) "● " else "")+meta.label(e) to { setEvent(e.id) } }
+        items+="＋ 新しいイベント" to { newEvent() }
+        target()?.let { u -> meta.get(u)?.let { m -> if(currentEvent!=null && m.eventId!=currentEvent) items+="選んだ写真を今のイベントに入れる" to { m.eventId=currentEvent; meta.changed(m); message("イベントに入れました") }
+            if(m.eventId!=null) items+="選んだ写真をイベントから外す（写真は消えません）" to { m.eventId=null; meta.changed(m); message("イベントから外しました") } } }
+        choose("イベント",items.map { it.first }) { items[it].second(); refreshInfoBar() }
+    }
+    private fun setEvent(id:String?) { currentEvent=id; prefs.edit().putString("currentEvent",id).apply(); refreshInfoBar()
+        meta.event(id)?.let { showBanner("これから撮るものは「${meta.label(it)}」に入ります",1800) } }
+    private fun newEvent() {
+        val today=SimpleDateFormat("yyyy-MM-dd",Locale.US).format(Date())
+        val name=EditText(this).apply { hint="名前（例：レゴランド）"; isSingleLine=true }
+        val start=EditText(this).apply { setText(today); hint="開始日 2026-11-09"; isSingleLine=true }
+        val end=EditText(this).apply { setText(today); hint="終了日 2026-11-10"; isSingleLine=true }
+        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(20),dp(8),dp(20),0); addView(name); addView(start); addView(end) }
+        android.app.AlertDialog.Builder(this).setTitle("新しいイベント").setView(box)
+            .setPositiveButton("作って使う") { _,_ ->
+                val ok=Regex("\\d{4}-\\d{2}-\\d{2}")
+                val n=name.text.toString().trim(); val a=start.text.toString().trim(); val b=end.text.toString().trim()
+                if(n.isEmpty() || !ok.matches(a) || !ok.matches(b)) { message("名前と日付（2026-11-09 の形）を入れてください"); return@setPositiveButton }
+                val e=meta.addEvent(n,minOf(a,b),maxOf(a,b)); setEvent(e.id)
+                // 指定する前に撮った、期間内でイベントの無い記録を、範囲を示して後から入れる
+                val fmt=SimpleDateFormat("yyyy-MM-dd",Locale.US)
+                val before=meta.all().filter { it.eventId==null && fmt.format(Date(it.created)) in e.start..e.end }
+                if(before.isNotEmpty()) android.app.AlertDialog.Builder(this).setTitle("前に撮ったものも入れますか？")
+                    .setMessage("${e.start}〜${e.end} に撮った、イベントの無い ${before.size} 件をこのイベントに入れます。")
+                    .setPositiveButton("入れる") { _,_ -> before.forEach { m -> m.eventId=e.id; meta.changed(m) }; message("${before.size} 件を入れました") }
+                    .setNegativeButton("入れない",null).show()
+            }.setNegativeButton("やめる",null).show()
+    }
+    /** 詳細：コメント・タグ・☆（CAM-030・031） */
+    private fun showDetail() {
+        val u=target() ?: run { message("先に写真を撮るか、下のサムネイルを選んでください"); return }
+        val m=meta.ensure(u,saveFolder) ?: run { message("この写真には付けられません"); return }
+        val comment=EditText(this).apply { setText(m.comment); hint="コメント（例：長女が初めてジェットコースターに乗ったよ）"; minLines=2 }
+        val tags=EditText(this).apply { setText(m.tags.joinToString(" ")); hint="タグ（空白で区切る：長女 初めて）"; isSingleLine=true }
+        val star=CheckBox(this).apply { text="☆ お気に入り"; isChecked=m.favorite }
+        val info=TextView(this).apply { textSize=12f; text="${m.name}\nフォルダ：${m.folder}　イベント：${meta.event(m.eventId)?.let { meta.label(it) } ?: "なし"}" }
+        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(20),dp(8),dp(20),0); addView(info); addView(comment); addView(tags); addView(star) }
+        android.app.AlertDialog.Builder(this).setTitle("詳細").setView(ScrollView(this).apply { addView(box) })
+            .setPositiveButton("保存") { _,_ ->
+                m.comment=comment.text.toString().trim(); m.favorite=star.isChecked
+                m.tags.clear(); m.tags.addAll(tags.text.toString().split(' ','　',',','、').map { it.trim().removePrefix("#") }.filter { it.isNotEmpty() }.distinct())
+                meta.changed(m); refreshInfoBar(); refreshStrip(); showBanner("保存しました",1000)
+            }.setNegativeButton("閉じる",null).show()
+    }
+    /** 探す：コメント・タグ・イベント名・フォルダで絞る、☆だけ */
+    private fun showSearch() {
+        val q=EditText(this).apply { setText(searchQuery); hint="例：ジェットコースター 長女"; isSingleLine=true }
+        val star=CheckBox(this).apply { text="☆ だけ"; isChecked=starOnly }
+        val box=LinearLayout(this).apply { orientation=LinearLayout.VERTICAL; setPadding(dp(20),dp(8),dp(20),0); addView(q); addView(star) }
+        android.app.AlertDialog.Builder(this).setTitle("探す").setView(box)
+            .setPositiveButton("探す") { _,_ -> searchQuery=q.text.toString().trim(); starOnly=star.isChecked; refreshStrip(); refreshInfoBar() }
+            .setNeutralButton("すべて表示") { _,_ -> searchQuery=""; starOnly=false; refreshStrip(); refreshInfoBar() }
+            .setNegativeButton("閉じる",null).show()
+    }
     /** 撮った写真・動画を丸いサムネイルで並べる（新しい順、最大 20）。フォルダを押すとそのフォルダだけ */
     private fun refreshStrip() {
         val filter=stripFilter
@@ -358,8 +448,10 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 } ?: emptyList()
             }.getOrDefault(emptyList()) }
             thumbStrip.removeAllViews()
-            items.forEach { (u,v) ->
-                val t=ThumbView(this@MainActivity,v).apply { contentDescription=if(v) "動画を開く" else "写真を開く"; setOnClickListener { openUri(u,v) } }
+            items.filter { meta.matches(meta.get(it.first),searchQuery,starOnly) }.forEach { (u,v) ->
+                val t=ThumbView(this@MainActivity,v).apply { contentDescription=if(v) "動画（押すと選ぶ、もう一度で開く）" else "写真（押すと選ぶ、もう一度で開く）"
+                    favorite=meta.get(u)?.favorite==true; selected2=u==selectedUri
+                    setOnClickListener { if(selectedUri==u) openUri(u,v) else { selectedUri=u; refreshStrip(); refreshInfoBar() } } }
                 thumbStrip.addView(t,LinearLayout.LayoutParams(dp(46),dp(46)).apply { setMargins(dp(3),dp(3),dp(3),dp(3)) })
                 lifecycleScope.launch { t.setImageBitmap(withContext(Dispatchers.IO) { runCatching { contentResolver.loadThumbnail(u,android.util.Size(dp(46),dp(46)),null) }.getOrNull() }) }
             }
@@ -586,7 +678,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         fun finish() {photoBusy=false;setBusy(recording!=null);refreshInfo();tryAutoRear()}
         val callback=object:ImageCapture.OnImageSavedCallback {
             override fun onImageSaved(result:ImageCapture.OutputFileResults) {
-                if(result.imageFormat==ImageFormat.JPEG || !pair) { saveLast(result.savedUri,false); updateThumb() }
+                if(result.imageFormat==ImageFormat.JPEG || !pair) { result.savedUri?.let { meta.create(it,basename+".jpg",saveFolder,currentEvent) }; saveLast(result.savedUri,false); updateThumb() }
                 saved++
                 if(!failed && saved==(if(pair)2 else 1)) {finish(); showBanner(if(pair) "RAWとJPEGを保存しました" else "写真を保存しました",1500)}
             }
@@ -601,7 +693,8 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun startRecording() {
         val cap=videoCapture ?: return
         try {
-            val values=ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,name()+".mp4"); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir()) }
+            videoName=name()+".mp4"; val vFolder=saveFolder; val vEvent=currentEvent
+            val values=ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,videoName); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir()) }
             val output=MediaStoreOutputOptions.Builder(contentResolver,MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
             var pending=cap.output.prepareRecording(this,output)
             val withAudio=audioEnabled && slowFps==0 && ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
@@ -614,7 +707,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                     is VideoRecordEvent.Finalize -> {
                         if(voiceOn) voice.start()
                         recording=null; videoBtn.isEnabled=true; setBusy(false)
-                        if(!event.hasError()) { saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
+                        if(!event.hasError()) { meta.create(event.outputResults.outputUri,videoName,vFolder,vEvent); saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
                         else {lastError="動画終了エラー ${event.error}: ${event.cause?.message}"; message(lastError)}
                         refreshInfo()
                         if(videoOnly) { videoOnly=false; bindCamera() } else tryAutoRear()
@@ -1018,12 +1111,13 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private fun shootBurst() {
         val cap=imageCapture
         if(!burstActive || cap==null || burstCount>=100) { burstActive=false; finishBurst(); return }
+        val bname="${burstBase}_B${(burstCount+1).toString().padStart(3,'0')}.jpg"
         val opts=ImageCapture.OutputFileOptions.Builder(contentResolver,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
-            put(MediaStore.MediaColumns.DISPLAY_NAME,"${burstBase}_B${(burstCount+1).toString().padStart(3,'0')}.jpg"); put(MediaStore.MediaColumns.MIME_TYPE,"image/jpeg"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir())
+            put(MediaStore.MediaColumns.DISPLAY_NAME,bname); put(MediaStore.MediaColumns.MIME_TYPE,"image/jpeg"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir())
         }).build()
         try {
             cap.takePicture(opts,main,object:ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
+                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; r.savedUri?.let { meta.create(it,bname,saveFolder,currentEvent) }; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
                 override fun onError(e:ImageCaptureException) { burstActive=false; finishBurst(); fail("連写",e) }
             })
         } catch(e:Exception) { burstActive=false; finishBurst(); fail("連写",e) }
@@ -1203,6 +1297,10 @@ class IconButton(context:Context, private val kind:String):View(context) {
             "hud" -> { for((yy,kx) in listOf(6.5f to 15f,12f to 8f,17.5f to 17f)) { line(3f,yy,21f,yy,c); c.drawCircle(x(kx),y(yy),2.3f*d,f) } }
             "voice" -> { rect(9f,2.5f,15f,14f,3f,c); c.drawArc(x(5.5f),y(6.5f),x(18.5f),y(17.5f),0f,180f,false,p); line(12f,17.5f,12f,21f,c); line(8.5f,21f,15.5f,21f,c)
                 if(variant!="on") line(4f,3f,20f,21f,c) }
+            "star" -> { val path=Path(); for(i in 0 until 10) { val rr=if(i%2==0) 9.5f else 4.2f; val a=Math.toRadians(-90.0+i*36); val px=x(12f+rr*cos(a).toFloat()); val py=y(12.8f+rr*sin(a).toFloat()); if(i==0) path.moveTo(px,py) else path.lineTo(px,py) }; path.close()
+                c.drawPath(path,if(variant=="on") f else p) }
+            "info" -> { c.drawCircle(x(12f),y(12f),9f*d,p); line(12f,11f,12f,16.5f,c); c.drawCircle(x(12f),y(7.6f),1.2f*d,f) }
+            "search" -> { c.drawCircle(x(10.5f),y(10.5f),6.5f*d,p); line(15.3f,15.3f,20.5f,20.5f,c) }
             "plus" -> { c.drawCircle(x(12f),y(12f),9f*d,p); line(12f,7.5f,12f,16.5f,c); line(7.5f,12f,16.5f,12f,c) }
             "flip" -> { c.drawArc(x(5f),y(5f),x(19f),y(19f),200f,130f,false,p); c.drawArc(x(5f),y(5f),x(19f),y(19f),20f,130f,false,p)
                 line(17.6f,6.6f,18.4f,9.6f,c); line(18.4f,9.6f,15.4f,9.4f,c); line(6.4f,17.4f,5.6f,14.4f,c); line(5.6f,14.4f,8.6f,14.6f,c) }
@@ -1213,7 +1311,10 @@ class IconButton(context:Context, private val kind:String):View(context) {
 }
 
 /** 丸いサムネイル。動画は左右にフィルムの穴と再生マーク（CAM-029 の見分け） */
+@android.annotation.SuppressLint("AppCompatCustomView")
 class ThumbView(context:Context, private val video:Boolean):ImageView(context) {
+    var favorite=false
+    var selected2=false
     private val d=resources.displayMetrics.density
     private val p=Paint(Paint.ANTI_ALIAS_FLAG)
     init {
@@ -1222,7 +1323,11 @@ class ThumbView(context:Context, private val video:Boolean):ImageView(context) {
     }
     override fun onDraw(c:Canvas) {
         super.onDraw(c)
-        p.style=Paint.Style.STROKE; p.strokeWidth=1.5f*d; p.color=Color.WHITE; c.drawCircle(width/2f,height/2f,width/2f-d,p)
+        p.style=Paint.Style.STROKE; p.strokeWidth=(if(selected2) 3.5f else 1.5f)*d; p.color=Color.WHITE; c.drawCircle(width/2f,height/2f,width/2f-p.strokeWidth/2,p)
+        if(favorite) { p.style=Paint.Style.FILL; p.color=Color.WHITE; p.setShadowLayer(2*d,0f,0f,Color.BLACK)
+            val cx=width-7*d; val cy=7*d; val r=5.5f*d
+            c.drawPath(Path().apply { for(i in 0 until 10) { val rr=if(i%2==0) r else r*0.45f; val a=Math.toRadians(-90.0+i*36); val px=cx+rr*cos(a).toFloat(); val py=cy+rr*sin(a).toFloat(); if(i==0) moveTo(px,py) else lineTo(px,py) }; close() },p)
+            p.clearShadowLayer() }
         if(video) { p.style=Paint.Style.FILL; p.color=Color.argb(220,255,255,255)
             val cx=width/2f; val cy=height/2f; val r=6*d
             c.drawPath(Path().apply { moveTo(cx-r*0.6f,cy-r); lineTo(cx+r,cy); lineTo(cx-r*0.6f,cy+r); close() },p) }
