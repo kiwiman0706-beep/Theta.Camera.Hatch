@@ -20,7 +20,7 @@ GitHub の kiwiman0706-beep/Theta.Hatch.Series にあり、このリポジトリ
 - 表示名 Theta Camera Hatch、applicationId `app.thetahatch.camera`（0.2.0 から。0.1.0 の `com.theta.camera.hatch`・旧鍵とは別アプリ）
 - Kotlin の namespace（パッケージ）は `com.theta.camera.hatch` のまま
 - 署名は CI の Secret 4 つ（`.github/workflows/release.yml`）。手元ビルドは鍵が無ければデバッグ鍵で、配布には使わない
-- 更新は `HatchUpdate.kt` でハブ（Home・KidsHome）に頼む。`REQUEST_INSTALL_PACKAGES` は書かない
+- 更新は `HatchUpdate.kt`（設定 → アップデート）。ハブ（Home・KidsHome）があればハブに頼み、無くても単体で Releases を確認 → DownloadManager で APK を取得 → SHA-256 照合 → 「ダウンロード」から入れる。起動時の自動確認は 12 時間ごと（撮影を邪魔しないようトーストだけ）。`REQUEST_INSTALL_PACKAGES` は書かない
 - UI はカメラの性質上ネイティブ（CameraX）。共通 UI（HTML/CSS/JS）・スキン対応は今後の課題
 
 > R11 全仕様版：まず START_HERE.md と SPEC_COMPLETE.md を参照。Androidは0.1.0のまま。最新モックは mock/index.html に同梱。

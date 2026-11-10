@@ -74,4 +74,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           V=${{ steps.ver.outputs.version }}
-          gh release create "v$V" dist/* --title "Theta Camera Hatch $V" --notes "Theta Camera Hatch $V" --target "$GITHUB_SHA"
+          gh release create "v$V" dist/* --title "Theta Camera Hatch $V" --generate-notes --target "$GITHUB_SHA"

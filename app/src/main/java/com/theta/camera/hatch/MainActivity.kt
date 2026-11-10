@@ -33,7 +33,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.window.area.*
 import androidx.window.layout.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -126,6 +128,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         lastVideo = prefs.getBoolean("lastVideo", false)
         buildUi()
         setupFold()
+        autoCheckUpdate()
         orientationListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(angle: Int) {
                 if (angle == ORIENTATION_UNKNOWN || recording != null) return
@@ -389,7 +392,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         else {flash=listOf(ImageCapture.FLASH_MODE_OFF,ImageCapture.FLASH_MODE_AUTO,ImageCapture.FLASH_MODE_ON)[it];imageCapture?.flashMode=flash;message(listOf("フラッシュOFF","フラッシュ自動","フラッシュON")[it])}
     } }
     private fun showSettings() {
-        val items=listOf("開いたら外側自撮り：${if(autoRear) "ON" else "OFF"}","写真解像度：${if(highResolution) "公開される最大" else "通常"}","写真比率：${if(wideAspect) "16:9" else "4:3"}","Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}","動画設定", "音声録音：${if(audioEnabled) "ON" else "OFF"}","水平ガイド：${if(overlay.level) "ON" else "OFF"}","カメラを再接続", "純正カメラを開く", "使い方・制限", "RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}", "更新を確認（版 ${BuildConfig.VERSION_NAME}）")
+        val items=listOf("開いたら外側自撮り：${if(autoRear) "ON" else "OFF"}","写真解像度：${if(highResolution) "公開される最大" else "通常"}","写真比率：${if(wideAspect) "16:9" else "4:3"}","Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}","動画設定", "音声録音：${if(audioEnabled) "ON" else "OFF"}","水平ガイド：${if(overlay.level) "ON" else "OFF"}","カメラを再接続", "純正カメラを開く", "使い方・制限", "RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}", "アップデート（版 ${BuildConfig.VERSION_NAME}）")
         choose("設定",items) { when(it) {
             0->{autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply();updateRearUi()}
             1->{highResolution=!highResolution;prefs.edit().putBoolean("highResolution",highResolution).apply();bindCamera()}
@@ -402,8 +405,52 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             8->{try {startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))} catch(e:Exception){message("純正カメラを起動できません")}}
             9->android.app.AlertDialog.Builder(this).setTitle("Theta Camera Hatch ${BuildConfig.VERSION_NAME}").setMessage("開いたら自撮り：閉じた状態でこのアプリを開き、ほぼ全開にすると外側画面への切替を要求します。OSの確認が出たら承認してください。\n\n録画・保存中は自動切替を保留します。自動切替しない場合は大きな自撮りボタンを使用してください。\n\n写真と動画はDCIM/ThetaCameraに保存。ピンチでズーム、タップでピント、音量キーで撮影。\n\n50MP・HDR・望遠などはOSの公開範囲に依存します。純正の全機能・画質を保証するものではありません。RAW+JPEGは対応時のみ。連写・8K・スローモーションは未実装です。Fold5実機での検証が必要な初版です。").setPositiveButton("OK",null).show()
             10->{rawJpeg=!rawJpeg;if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE};bindCamera()}
-            11->HatchUpdate.request(this)
+            11->showUpdateMenu()
         } }
+    }
+    private fun showUpdateMenu() {
+        val auto=prefs.getBoolean("updateAuto",true)
+        val items=listOf("更新を確認","起動時に自動で確認（12時間ごと）：${if(auto) "ON" else "OFF"}","Releases ページを開く")
+        choose("アップデート（今の版 ${BuildConfig.VERSION_NAME}）",items) { when(it) {
+            0->checkUpdate(manual=true)
+            1->prefs.edit().putBoolean("updateAuto",!auto).apply()
+            2->HatchUpdate.openReleases(this)
+        } }
+    }
+    private fun autoCheckUpdate() {
+        if(!prefs.getBoolean("updateAuto",true)) return
+        if(System.currentTimeMillis()-prefs.getLong("updateChecked",0L) < HatchUpdate.CHECK_INTERVAL_MS) return
+        checkUpdate(manual=false)
+    }
+    private fun checkUpdate(manual:Boolean) {
+        if(manual) message("更新を確認しています…")
+        lifecycleScope.launch {
+            val r=withContext(Dispatchers.IO){ runCatching { HatchUpdate.fetchLatest() } }
+            if(isFinishing||isDestroyed) return@launch
+            val rel=r.getOrElse { e -> if(manual) message("確認できませんでした：${e.message}"); return@launch }
+            prefs.edit().putLong("updateChecked",System.currentTimeMillis()).apply()
+            if(!HatchUpdate.isNewer(rel.version,BuildConfig.VERSION_NAME)) { if(manual) message("最新です（${BuildConfig.VERSION_NAME}）"); return@launch }
+            // 起動時の自動確認では撮影を邪魔しないよう知らせるだけ
+            if(!manual) { message("新しい版 ${rel.version} があります（設定 → アップデート）"); return@launch }
+            showUpdateDialog(rel)
+        }
+    }
+    private fun showUpdateDialog(rel:HatchUpdate.Release) {
+        val notes=rel.notes.trim().take(1500).ifEmpty { "（変更点の記載なし）" }
+        val b=android.app.AlertDialog.Builder(this).setTitle("新しい版 ${rel.version}（今 ${BuildConfig.VERSION_NAME}）").setMessage(notes)
+        if(HatchUpdate.hasHub(this)) {
+            b.setPositiveButton("ハブで更新") {_,_-> if(!HatchUpdate.requestHub(this)) startUpdateDownload(rel) }
+            b.setNeutralButton("このアプリで") {_,_-> startUpdateDownload(rel) }
+        } else {
+            b.setPositiveButton("ダウンロードして入れる") {_,_-> startUpdateDownload(rel) }
+            b.setNeutralButton("Releases") {_,_-> HatchUpdate.openReleases(this) }
+        }
+        b.setNegativeButton("あとで",null).show()
+    }
+    private fun startUpdateDownload(rel:HatchUpdate.Release) {
+        runCatching { HatchUpdate.download(this,rel) {_,msg-> message(msg) } }
+            .onSuccess { message("ダウンロードを始めました（${rel.apkName}）") }
+            .onFailure { message("ダウンロードできません。Releases ページを開きます"); HatchUpdate.openReleases(this) }
     }
     private fun showVideoSettings() {
         val info=runCatching {provider?.getCameraInfo(baseSelector())}.getOrNull() ?: return
