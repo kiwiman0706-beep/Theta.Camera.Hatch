@@ -13,8 +13,8 @@ android {
         applicationId = "app.thetahatch.camera"
         minSdk = 29
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.12.0"
+        versionCode = 14
+        versionName = "0.13.0"
     }
     buildFeatures { buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
@@ -33,7 +33,7 @@ android {
             signingConfig = signingConfigs.getByName(if (ksFile != null) "thetahatch" else "debug")
         }
     }
-    testOptions { unitTests.isReturnDefaultValues = true }
+    testOptions { unitTests.isReturnDefaultValues = true; unitTests.all { t -> System.getProperty("heif.out")?.let { t.systemProperty("heif.out", it) } } }
 }
 dependencies {
     implementation("androidx.activity:activity-ktx:1.10.1")
@@ -45,6 +45,7 @@ dependencies {
     implementation("androidx.camera:camera-video:$camera")
     implementation("androidx.camera:camera-extensions:$camera")
     implementation("androidx.window:window:1.4.0")
+    implementation("androidx.heifwriter:heifwriter:1.0.0")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     testImplementation("junit:junit:4.13.2")

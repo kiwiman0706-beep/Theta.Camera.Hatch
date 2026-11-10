@@ -95,6 +95,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private val recentErrors = ArrayDeque<String>()
     private var burstLimit = 100
     private var recordStartedAt = 0L
+    private var heifClap = false     // 全体を HEIF で残し、画面の範囲を clap で表示
     private val meta by lazy { MetaStore(this) }
     private var currentEvent: String? = null
     private var selectedUri: Uri? = null
@@ -194,6 +195,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         autoRear = prefs.getBoolean("autoRear", true)
         lockPortrait = prefs.getBoolean("lockPortrait", true)
+        heifClap = prefs.getBoolean("heifClap", false)
         applyOrientationLock()
         highResolution = prefs.getBoolean("highResolution", false)
         aspect = prefs.getString("aspect", "フル") ?: "フル"
@@ -582,7 +584,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             }
             val ic=imageCapture; val vc=videoCapture
             // 画面に見えている範囲（比率）で切り出して保存する
-            val vp=preview.viewPort
+            // HEIF（全体を残す）のときは切り出さない。表示範囲は clap で書く
+            val vp=if(heifClap) null else preview.viewPort
             fun bind(vararg uc:UseCase):Camera = if(vp!=null) p.bindToLifecycle(this,selector,UseCaseGroup.Builder().setViewPort(vp).apply { uc.forEach { addUseCase(it) } }.build()) else p.bindToLifecycle(this,selector,*uc)
             camera=when {
                 ic!=null && vc!=null -> try { bind(pv,ic,vc) } catch(e:IllegalArgumentException) {
@@ -691,6 +694,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             put(MediaStore.MediaColumns.DISPLAY_NAME,basename+ext);put(MediaStore.MediaColumns.MIME_TYPE,mime);put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir())
         }).build()
         val pair=cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG
+        if(heifClap && !pair) { takeHeif(cap,basename); return }
         var saved=0; var failed=false
         fun finish() {photoBusy=false;setBusy(recording!=null);refreshInfo();tryAutoRear()}
         val callback=object:ImageCapture.OnImageSavedCallback {
@@ -705,6 +709,54 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             if(pair) cap.takePicture(output(".dng","image/x-adobe-dng"),output(".jpg","image/jpeg"),main,callback)
             else cap.takePicture(output(".jpg","image/jpeg"),main,callback)
         } catch(e:Exception) {failed=true;finish();fail("写真撮影",e)}
+    }
+
+    /**
+     * 写真を全体（センサーの画角いっぱい）で HEIF に保存し、画面に見えている範囲を clap で付ける。
+     * 対応したビューアは画面どおりに表示し、画素は全部残るので後から広げられる。失敗したら JPEG のまま保存する。
+     */
+    private fun takeHeif(cap:ImageCapture, basename:String) {
+        val viewW=stage.width; val viewH=stage.height
+        val dispRot=runCatching { camera!!.cameraInfo.getSensorRotationDegrees(preview.display?.rotation ?: Surface.ROTATION_0) }.getOrDefault(90)
+        val folder=saveFolder; val event=currentEvent; val dir=saveDir()
+        fun done() { photoBusy=false; setBusy(recording!=null); refreshInfo(); tryAutoRear() }
+        try {
+            cap.takePicture(main,object:ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(img:ImageProxy) {
+                    val rot=img.imageInfo.rotationDegrees; val w=img.width; val h=img.height
+                    val buf=img.planes[0].buffer; val jpeg=ByteArray(buf.remaining()).also { buf.get(it) }; img.close()
+                    val (fw,fh)=HeifClap.visibleFraction(w,h,dispRot,maxOf(viewW,1),maxOf(viewH,1))
+                    val cw=((w*fw).roundToInt()/2*2).coerceIn(2,w); val ch=((h*fh).roundToInt()/2*2).coerceIn(2,h)
+                    lifecycleScope.launch {
+                        val r=withContext(Dispatchers.IO) { runCatching {
+                            val bmp=BitmapFactory.decodeByteArray(jpeg,0,jpeg.size) ?: error("画像を読めません")
+                            val tmp=java.io.File(cacheDir,"$basename.heic"); tmp.delete()
+                            val wr=androidx.heifwriter.HeifWriter.Builder(tmp.absolutePath,bmp.width,bmp.height,androidx.heifwriter.HeifWriter.INPUT_MODE_BITMAP)
+                                .setQuality(95).setRotation(rot).build()
+                            wr.start(); wr.addBitmap(bmp); wr.stop(15000); wr.close(); bmp.recycle()
+                            val out=HeifClap.insert(tmp.readBytes(),cw,ch); tmp.delete()
+                            writeImage(out,"$basename.heic","image/heic",dir) to "$basename.heic"
+                        }.recoverCatching { e ->
+                            noteError("HEIF 保存に失敗、JPEG で保存: ${e.message}")
+                            writeImage(jpeg,"$basename.jpg","image/jpeg",dir) to "$basename.jpg"
+                        } }
+                        r.onSuccess { (uri,nm) -> uri?.let { meta.create(it,nm,folder,event).also { m -> m.crop="${cw}x${ch} / ${w}x${h}"; meta.changed(m) } }
+                            saveLast(uri,false); updateThumb(); showBanner(if(nm.endsWith(".heic")) "写真を保存しました（全体＋表示範囲）" else "写真を保存しました（JPEG）",1500) }
+                            .onFailure { fail("写真保存",Exception(it)) }
+                        done()
+                    }
+                }
+                override fun onError(e:ImageCaptureException) { done(); fail("写真撮影",e) }
+            })
+        } catch(e:Exception) { done(); fail("写真撮影",e) }
+    }
+    private fun writeImage(bytes:ByteArray, name:String, mime:String, dir:String):Uri? {
+        val uri=contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME,name); put(MediaStore.MediaColumns.MIME_TYPE,mime); put(MediaStore.MediaColumns.RELATIVE_PATH,dir)
+            put(MediaStore.Images.Media.DATE_TAKEN,System.currentTimeMillis()); put(MediaStore.MediaColumns.IS_PENDING,1) }) ?: return null
+        contentResolver.openOutputStream(uri)?.use { it.write(bytes) }
+        contentResolver.update(uri,ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING,0) },null,null)
+        return uri
     }
 
     private fun startRecording() {
@@ -775,6 +827,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             "音声録音：${if(audioEnabled) "ON" else "OFF"}" to { audioEnabled=!audioEnabled; prefs.edit().putBoolean("audio",audioEnabled).apply() },
             "写真解像度：${if(highResolution) "公開される最大" else "通常"}" to { highResolution=!highResolution; prefs.edit().putBoolean("highResolution",highResolution).apply(); bindCamera() },
             "比率：$aspect" to { chooseAspect() },
+            "写真の保存形式：${if(heifClap) "HEIF（全体を残し、画面の範囲を表示）" else "JPEG（画面どおりに切る）"}" to { heifClap=!heifClap; prefs.edit().putBoolean("heifClap",heifClap).apply(); bindCamera()
+                showBanner(if(heifClap) "写真は全体を残し、画面の範囲を表示範囲として記録します（連写・RAW は JPEG）" else "写真は画面どおりに切って JPEG で保存します",3500) },
         ).toMutableList()
         val formats=runCatching { ImageCapture.getImageCaptureCapabilities(camera!!.cameraInfo).supportedOutputFormats }.getOrDefault(emptySet())
         if(formats.contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)) items.add(6,"Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() })
@@ -1127,7 +1181,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 .put("fps",if(slowFps>0) slowFps else if(sixtyFps) 60 else 30).put("slowMotion",slowFps>0)
                 .put("flash",when { torch -> "torch"; flash==ImageCapture.FLASH_MODE_AUTO -> "auto"; flash==ImageCapture.FLASH_MODE_ON -> "on"; else -> "off" })
                 .put("timer",timerSeconds).put("ev",camera?.cameraInfo?.exposureState?.let { it.exposureCompensationIndex*it.exposureCompensationStep.toDouble() } ?: 0.0)
-                .put("photoResolution",imageCapture?.resolutionInfo?.resolution?.toString() ?: JSONObjectNull))
+                .put("photoResolution",imageCapture?.resolutionInfo?.resolution?.toString() ?: JSONObjectNull).put("saveFormat",if(heifClap) "heif-clap" else "jpeg-crop"))
             .put("fold",J().put("hingeAngle",lastAngle?.toDouble() ?: JSONObjectNull).put("halfOpen",halfOpen).put("flexMode",flexHingeTop>0).put("flexLandscape",flexLandscape)
                 .put("deviceAngle",deviceAngle).put("lockPortrait",lockPortrait)
                 .put("rearDisplay",areaStatus.toString()).put("rearSession",rearSession!=null).put("autoRear",autoRear)
@@ -1156,6 +1210,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                     "coverShutter" -> { coverShutter=b; prefs.edit().putBoolean(k,b).apply() }
                     "updateAuto" -> prefs.edit().putBoolean(k,b).apply()
                     "highResolution" -> { highResolution=b; prefs.edit().putBoolean(k,b).apply(); bindCamera() }
+                    "heifClap" -> { heifClap=b; prefs.edit().putBoolean(k,b).apply(); bindCamera() }
                     else -> return bad("unknown key")
                 }; refreshInfo(); ok("$k=$v") }
             "OPEN" -> { when(v) { "settings" -> showSettings(); "diagnostics" -> showDiagnostics(); "update" -> showUpdateMenu(); "events" -> showEvents(); "search" -> showSearch(); "detail" -> showDetail(); else -> return bad("screen: settings|diagnostics|update|events|search|detail") }; ok(v) }

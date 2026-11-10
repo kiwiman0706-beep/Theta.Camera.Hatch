@@ -74,7 +74,7 @@ adb shell am broadcast -a app.thetahatch.adb.STATUS -n app.thetahatch.camera/app
 | `OPEN` | `settings`・`diagnostics`・`update`・`events`・`search`・`detail` | 画面を開く |
 | `CHECK_UPDATE` | — | 新しい版を確認 |
 | `DIAG` | — | 端末診断の全文 |
-| `GET` / `SET` | `--es key <名前>`（SET は `--es value`） | 設定（autoRear・audio・grid・level・lockPortrait・coverShutter・updateAuto・highResolution） |
+| `GET` / `SET` | `--es key <名前>`（SET は `--es value`） | 設定（autoRear・audio・grid・level・lockPortrait・coverShutter・updateAuto・highResolution・heifClap） |
 
 例：
 
@@ -117,3 +117,4 @@ Fold5（SC-55D）で確かめたら、ここから消していく。
 - 声シャッター
 - サイドカー（Documents/ThetaCamera の .xmp・.theta.json）
 - アプリ内アップデート
+- 写真の保存形式 HEIF（全体＋表示範囲 clap）：保存できるか、Samsung ギャラリー・Google フォト・PC（Windows・Mac）で画面どおりに切れて見えるか、全体の 4080×3060 が残っているか（`heif-info` や libheif で確認）。動画はこの形式では切り出さない

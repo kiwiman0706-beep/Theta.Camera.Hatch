@@ -24,7 +24,7 @@ class MetaStore(private val context: Context) {
     data class Meta(
         val assetId: String, val uri: String, val name: String, var folder: String,
         var eventId: String?, var favorite: Boolean, val tags: MutableList<String>, var comment: String, val created: Long,
-    )
+    ) { var crop: String = "" }
 
     val events = mutableListOf<Event>()
     private val metas = LinkedHashMap<String, Meta>()
@@ -90,7 +90,7 @@ class MetaStore(private val context: Context) {
             metas.values.forEach { m ->
                 put(JSONObject().put("asset_id", m.assetId).put("uri", m.uri).put("media", m.name).put("folder", m.folder)
                     .put("event_id", m.eventId ?: JSONObject.NULL).put("favorite", m.favorite).put("tags", JSONArray(m.tags))
-                    .put("comment", m.comment).put("created", m.created))
+                    .put("comment", m.comment).put("created", m.created).put("crop", m.crop))
             }
         })
         runCatching { file.writeText(o.toString()) }
@@ -104,6 +104,7 @@ class MetaStore(private val context: Context) {
                 val tags = j.optJSONArray("tags")?.let { t -> MutableList(t.length()) { t.getString(it) } } ?: mutableListOf()
                 val m = Meta(j.getString("asset_id"), j.getString("uri"), j.getString("media"), j.optString("folder"),
                     if (j.isNull("event_id")) null else j.optString("event_id"), j.optBoolean("favorite"), tags, j.optString("comment"), j.optLong("created"))
+                m.crop = j.optString("crop")
                 metas[m.uri] = m
             }
         }
@@ -120,6 +121,7 @@ class MetaStore(private val context: Context) {
             .put("event", ev?.let { eventJson(it) } ?: JSONObject.NULL)
             .put("favorite", m.favorite).put("rating", if (m.favorite) 1 else 0)
             .put("tags", JSONArray(m.tags)).put("comment", m.comment)
+            .put("display_crop", if (m.crop.isBlank()) JSONObject.NULL else JSONObject().put("type", "clap-center").put("size", m.crop))
             .put("created", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).format(Date(m.created)))
         upsert(dir, "$base.theta.json", "application/json", json.toString(2).toByteArray())
         upsert(dir, "$base.xmp", "application/octet-stream", xmp(m, ev).toByteArray())
