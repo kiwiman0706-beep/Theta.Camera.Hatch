@@ -8,6 +8,7 @@
         <package android:name="app.thetahatch.home" />
         <package android:name="app.thetahatch.kidshome" />
         <intent><action android:name="android.intent.action.VIEW" /><data android:scheme="https" /></intent>
+        <intent><action android:name="android.speech.RecognitionService" /></intent>
     </queries>
     <application android:theme="@style/AppTheme" android:label="Theta Camera Hatch" android:icon="@drawable/ic_launcher" android:allowBackup="false" android:supportsRtl="true">
         <activity android:name=".MainActivity" android:exported="true" android:resizeableActivity="true" android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|density">
