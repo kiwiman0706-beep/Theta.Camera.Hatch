@@ -742,6 +742,7 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             appendLine("Hardware level: ${cc.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL)}")
             appendLine("Focal mm: ${cc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.joinToString()}")
             appendLine("Physical IDs: ${cc.physicalCameraIds}")
+            appendCameraDeep(manager,id,cc)
             val caps=cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
             appendLine("RAW advertised: ${caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)} (RAW+JPEG availability also depends on CameraX and stream combination)")
             appendLine("Manual sensor: ${caps.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_MANUAL_SENSOR)}")
@@ -765,7 +766,52 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }.onFailure {appendLine("CameraX query error: ${it.message}")}
             appendLine()
         } }.onFailure {appendLine("Camera enumeration error: ${it.message}")}
+        appendDeviceDeep(manager)
         appendLine("No photos, videos, account details, or device serial included.")
+    }
+    /** 純正カメラ並みにできるかを決める値（50MP・8K・スロー・Samsung 独自キーなど） */
+    private fun StringBuilder.appendCameraDeep(manager:CameraManager, id:String, cc:CameraCharacteristics) {
+        val caps=cc.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
+        val capNames=mapOf(1 to "MANUAL_SENSOR",2 to "MANUAL_POST_PROCESSING",3 to "RAW",4 to "PRIVATE_REPROCESSING",5 to "READ_SENSOR_SETTINGS",6 to "BURST_CAPTURE",7 to "YUV_REPROCESSING",8 to "DEPTH_OUTPUT",9 to "CONSTRAINED_HIGH_SPEED_VIDEO",10 to "MOTION_TRACKING",11 to "LOGICAL_MULTI_CAMERA",12 to "MONOCHROME",13 to "SECURE_IMAGE_DATA",14 to "SYSTEM_CAMERA",15 to "OFFLINE_PROCESSING",16 to "ULTRA_HIGH_RESOLUTION_SENSOR",17 to "REMOSAIC_REPROCESSING",18 to "DYNAMIC_RANGE_TEN_BIT",19 to "STREAM_USE_CASE",20 to "COLOR_SPACE_PROFILES")
+        appendLine("Capabilities: ${caps.joinToString { capNames[it] ?: it.toString() }}")
+        appendLine("Pixel array: ${cc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)}  active: ${cc.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE)}")
+        if(Build.VERSION.SDK_INT>=30) appendLine("Zoom ratio range: ${cc.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)}")
+        if(Build.VERSION.SDK_INT>=31) runCatching {
+            appendLine("Max-res pixel array: ${cc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE_MAXIMUM_RESOLUTION)}")
+            val mr=cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION)
+            appendLine("Max-res JPEG sizes: ${mr?.getOutputSizes(ImageFormat.JPEG)?.joinToString()}")
+            appendLine("Max-res RAW sizes: ${mr?.getOutputSizes(ImageFormat.RAW_SENSOR)?.joinToString()}")
+        }
+        val map=cc.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        appendLine("Largest recorder sizes: ${map?.getOutputSizes(android.media.MediaRecorder::class.java)?.sortedByDescending { it.width*it.height }?.take(4)?.joinToString()}")
+        runCatching { map?.highSpeedVideoSizes?.forEach { sz -> appendLine("High-speed video $sz: ${map.getHighSpeedVideoFpsRangesFor(sz).joinToString()}") } }
+        appendLine("Video stabilization modes: ${cc.get(CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES)?.joinToString()} (2=PREVIEW_STABILIZATION)")
+        appendLine("Scene modes: ${cc.get(CameraCharacteristics.CONTROL_AVAILABLE_SCENE_MODES)?.joinToString()}")
+        appendLine("Face detect modes: ${cc.get(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES)?.joinToString()}")
+        if(Build.VERSION.SDK_INT>=33) runCatching { appendLine("10-bit profiles: ${cc.get(CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES)?.supportedProfiles}") }
+        if(Build.VERSION.SDK_INT>=31) runCatching {
+            val ext=manager.getCameraExtensionCharacteristics(id).supportedExtensions
+            val names=mapOf(0 to "AUTOMATIC",1 to "FACE_RETOUCH",2 to "BOKEH",3 to "HDR",4 to "NIGHT",5 to "EYES_FREE_VIDEOGRAPHY")
+            appendLine("Camera2 extensions: ${ext.joinToString { names[it] ?: it.toString() }}")
+        }
+        cc.physicalCameraIds.forEach { pid -> runCatching {
+            val pc=manager.getCameraCharacteristics(pid)
+            appendLine("  physical $pid: focal ${pc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.joinToString()} mm, pixels ${pc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)}${if(Build.VERSION.SDK_INT>=31) ", max-res ${pc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE_MAXIMUM_RESOLUTION)}" else ""}")
+        } }
+        val vendor=cc.keys.map { it.name }.filter { !it.startsWith("android.") }
+        appendLine("Vendor keys (${vendor.size}): ${vendor.sorted().joinToString()}")
+    }
+    private fun StringBuilder.appendDeviceDeep(manager:CameraManager) {
+        appendLine("=== Device ===")
+        if(Build.VERSION.SDK_INT>=30) runCatching { appendLine("Concurrent camera sets: ${manager.concurrentCameraIds}") }
+        appendLine("Public IDs: ${manager.cameraIdList.joinToString()}")
+        val hidden=(0..63).map(Int::toString).filter { it !in manager.cameraIdList && runCatching { manager.getCameraCharacteristics(it) }.isSuccess }
+        appendLine("Hidden but readable IDs: ${hidden.ifEmpty { listOf("なし") }.joinToString()}")
+        hidden.forEach { hid -> runCatching { val hc=manager.getCameraCharacteristics(hid)
+            appendLine("  hidden $hid: facing ${hc.get(CameraCharacteristics.LENS_FACING)}, focal ${hc.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.joinToString()} mm, pixels ${hc.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE)}") } }
+        runCatching { val pm=packageManager; appendLine("Samsung camera: ${pm.getPackageInfo("com.sec.android.app.camera",0).versionName}") }
+        appendLine("Build: ${Build.DISPLAY} / One UI(SEM_PLATFORM_INT): ${runCatching { Build.VERSION::class.java.getField("SEM_PLATFORM_INT").getInt(null) }.getOrDefault(-1)}")
+        appendLine()
     }
     private fun showDiagnostics() {
         val report=diagnosticText()
