@@ -2,6 +2,7 @@
 package com.theta.camera.hatch
 
 import android.Manifest
+import com.google.mlkit.vision.barcode.common.Barcode
 import android.content.*
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -111,6 +112,14 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private var sysCapture: SysCapture? = null
     /** ロック画面から開かれた（ロックを解除せずに撮る）。ほかの写真やフォルダは見せない */
     private var secureMode = false
+    // QR・バーコード：ふだんの撮影画面で自動で読み、映像の上にリンクを出す（純正カメラと同じ）
+    private var autoCode = true
+    private val codeScanner by lazy { com.google.mlkit.vision.barcode.BarcodeScanning.getClient() }
+    private lateinit var codeChip: TextView
+    private var codeBusy = false
+    private var codeShownAt = 0L
+    private var codeValue: Barcode? = null
+    private val codeTick = object : Runnable { override fun run() { scanFrame(); handler.postDelayed(this, 500) } }
     private val captured = mutableListOf<Pair<java.io.File,String>>()   // 返すファイルと MIME
     private var captureAlsoSave = false
     private lateinit var captureBar: LinearLayout
@@ -235,6 +244,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         lastUri = prefs.getString("lastUri", null)?.let(Uri::parse)
         lastVideo = prefs.getBoolean("lastVideo", false)
         captureAlsoSave = prefs.getBoolean("captureAlsoSave", false)
+        autoCode = prefs.getBoolean("autoCode", true)
         parseCapture(intent)
         cleanCaptureDir()
         buildUi()
@@ -366,7 +376,11 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             hrow(eventBtn,starBtn,infoBtn,searchBtn),
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(thumbStrip) },
             HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled=false; addView(folderRow) })
-        bottomBox=vcol(Gravity.CENTER_HORIZONTAL,stripBox,evBar,zoomPill)
+        codeChip=TextView(this).apply { textSize=14f; setTextColor(Color.WHITE); isSingleLine=true; ellipsize=android.text.TextUtils.TruncateAt.END; maxWidth=dp(300)
+            background=round(Color.argb(190,0,0,0),20); setPadding(dp(16),dp(10),dp(16),dp(10)); visibility=View.GONE; elevation=dp(4).toFloat()
+            setOnClickListener { codeValue?.let { openCode(it) } } }
+        bottomBox=vcol(Gravity.CENTER_HORIZONTAL,codeChip,stripBox,evBar,zoomPill)
+        (codeChip.layoutParams as? LinearLayout.LayoutParams)?.bottomMargin=dp(8)
         ui.addView(bottomBox,at(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         lastThumb=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; background=GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(60,0,0,0)); setStroke(dp(2),Color.WHITE) }; clipToOutline=true; setPadding(dp(2),dp(2),dp(2),dp(2)); contentDescription="直前の写真・動画を開く"; setOnClickListener { openLast() } }
         rotatables.add(lastThumb); rotatables.add(scanBtn)
@@ -945,6 +959,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         if(formats.contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)) items.add(6,"Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() })
         if(formats.contains(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)) items.add(6,"RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}" to { rawJpeg=!rawJpeg; if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE;sceneHdr=false}; bindCamera() })
         items.addAll(listOf<Pair<String,()->Unit>>(
+            "QR・バーコードを自動で読む：${if(autoCode) "ON" else "OFF"}" to { autoCode=!autoCode; prefs.edit().putBoolean("autoCode",autoCode).apply(); handler.removeCallbacks(codeTick); if(autoCode) handler.post(codeTick) else hideCode() },
             "ほかの Hatch に呼ばれたときも自分にも保存：${if(captureAlsoSave) "ON" else "OFF"}" to { captureAlsoSave=!captureAlsoSave; prefs.edit().putBoolean("captureAlsoSave",captureAlsoSave).apply() },
             "外画面ライブにシャッターも出す：${if(coverShutter) "ON" else "OFF"}" to { coverShutter=!coverShutter; prefs.edit().putBoolean("coverShutter",coverShutter).apply(); if(coverSession!=null) { stopCover(); startCover() } },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
@@ -952,7 +967,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             "カメラを再接続" to { startProvider() },
             "純正カメラを開く" to { try {startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))} catch(e:Exception){message("純正カメラを起動できません")} },
             "端末診断" to { showDiagnostics() },
-            "使い方・制限" to { android.app.AlertDialog.Builder(this).setTitle("Theta Camera Hatch ${BuildConfig.VERSION_NAME}").setMessage("写真・動画・スキャンの3つのボタンで撮影。動画中も写真を撮れます（端末が同時接続に対応している場合）。\n\n「操作を表示」でフラッシュ・タイマー・明るさ・水平・グリッド・写真モード・動画画質・レンズを出せます。\n\n開いたら自撮り：閉じた状態でこのアプリを開き、ほぼ全開にすると外画面への切替を要求します。OSの確認が出たら承認してください。録画・保存中は自動切替を保留します。\n\n写真と動画はDCIM/ThetaCamera、スキャンはDCIM/ThetaCamera/ScanとDocuments/ThetaCameraに保存。ピンチでズーム、タップでピント、音量キーで写真。\n\n50MP・HDR・望遠などはOSの公開範囲に依存します。Fold5実機での検証が必要です。").setPositiveButton("OK",null).show() },
+            "使い方・制限" to { android.app.AlertDialog.Builder(this).setTitle("Theta Camera Hatch ${BuildConfig.VERSION_NAME}").setMessage("写真・動画・スキャン（書類）の3つのボタンで撮影。QR・バーコードは映すだけで画面の下に出るので、押すと開けます。動画中も写真を撮れます（端末が同時接続に対応している場合）。\n\n「操作を表示」でフラッシュ・タイマー・明るさ・水平・グリッド・写真モード・動画画質・レンズを出せます。\n\n開いたら自撮り：閉じた状態でこのアプリを開き、ほぼ全開にすると外画面への切替を要求します。OSの確認が出たら承認してください。録画・保存中は自動切替を保留します。\n\n写真と動画はDCIM/ThetaCamera、スキャンはDCIM/ThetaCamera/ScanとDocuments/ThetaCameraに保存。ピンチでズーム、タップでピント、音量キーで写真。\n\n50MP・HDR・望遠などはOSの公開範囲に依存します。Fold5実機での検証が必要です。").setPositiveButton("OK",null).show() },
             "アップデート（版 ${BuildConfig.VERSION_NAME}）" to { showUpdateMenu() }))
         choose("設定",items.map { it.first }) { items[it].second(); refreshInfo() }
     }
@@ -1300,7 +1315,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 .put("coverPresent",presentStatus.toString()).put("coverLive",coverSession!=null))
             .put("ui",J().put("hud",hudShown).put("voiceShutter",voiceOn).put("saveFolder",saveFolder).put("folders",org.json.JSONArray(folders))
                 .put("event",meta.event(currentEvent)?.let { meta.label(it) } ?: JSONObjectNull).put("lastUri",lastUri?.toString() ?: JSONObjectNull))
-            .put("secureMode",secureMode).put("capture",capture?.let { c -> org.json.JSONObject().put("system",sysCapture?.kind ?: JSONObjectNull).put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
+            .put("secureMode",secureMode).put("code",codeValue?.rawValue ?: JSONObjectNull).put("autoCode",autoCode).put("capture",capture?.let { c -> org.json.JSONObject().put("system",sysCapture?.kind ?: JSONObjectNull).put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
             .put("errors",org.json.JSONArray(recentErrors.toList()))
     }
     private val JSONObjectNull: Any get() = org.json.JSONObject.NULL
@@ -1528,6 +1543,51 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             meta.create(uri,f.name,folder,event)
         } }
     }
+    /** 映像を 0.5 秒ごとに見て、QR・バーコードがあれば映像の上に出す。録画中・スロー・写真の保存中は休む */
+    private fun scanFrame() {
+        if(!autoCode || codeBusy || camera==null || slow!=null || photoBusy || burstActive) return
+        if(preview.visibility!=View.VISIBLE || !lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+        val full=preview.bitmap ?: return
+        val scale=minOf(1f,1280f/maxOf(full.width,full.height))
+        val bmp=if(scale<1f) android.graphics.Bitmap.createScaledBitmap(full,(full.width*scale).toInt(),(full.height*scale).toInt(),true).also { full.recycle() } else full
+        codeBusy=true
+        codeScanner.process(com.google.mlkit.vision.common.InputImage.fromBitmap(bmp,0))
+            .addOnSuccessListener { list -> val bc=list.firstOrNull { !it.rawValue.isNullOrBlank() }
+                if(bc!=null) showCode(bc) else if(System.currentTimeMillis()-codeShownAt>2500) hideCode() }
+            .addOnCompleteListener { codeBusy=false; bmp.recycle() }
+    }
+    private fun codeLabel(bc:Barcode):String {
+        return when(bc.valueType) {
+            Barcode.TYPE_URL -> "🔗 "+(bc.url?.url ?: bc.rawValue).orEmpty().removePrefix("https://").removePrefix("http://").trimEnd('/')
+            Barcode.TYPE_WIFI -> "📶 Wi-Fi：${bc.wifi?.ssid.orEmpty()}"
+            Barcode.TYPE_PHONE -> "📞 ${bc.phone?.number.orEmpty()}"
+            Barcode.TYPE_EMAIL -> "✉ ${bc.email?.address.orEmpty()}"
+            Barcode.TYPE_CONTACT_INFO -> "👤 ${bc.contactInfo?.name?.formattedName ?: "連絡先"}"
+            Barcode.TYPE_GEO -> "📍 地図で開く"
+            Barcode.TYPE_PRODUCT, Barcode.TYPE_ISBN -> "🏷 ${bc.rawValue}"
+            else -> "▦ ${bc.rawValue}"
+        }
+    }
+    private fun showCode(bc:Barcode) {
+        codeShownAt=System.currentTimeMillis()
+        if(codeValue?.rawValue==bc.rawValue && codeChip.visibility==View.VISIBLE) return
+        codeValue=bc; codeChip.text=codeLabel(bc); codeChip.contentDescription="読み取った内容を開く：${bc.rawValue}"
+        codeChip.alpha=0f; codeChip.visibility=View.VISIBLE; codeChip.animate().alpha(1f).setDuration(150).start()
+    }
+    private fun hideCode() { if(::codeChip.isInitialized && codeChip.visibility==View.VISIBLE) { codeChip.visibility=View.GONE; codeValue=null } }
+    /** 押したら：URL は開く、電話・メール・地図はそのアプリへ、それ以外は内容を見せてコピー・共有 */
+    private fun openCode(bc:Barcode) {
+        val raw=bc.rawValue.orEmpty()
+        val intent=when(bc.valueType) {
+            Barcode.TYPE_URL -> Intent(Intent.ACTION_VIEW,Uri.parse(bc.url?.url ?: raw))
+            Barcode.TYPE_PHONE -> Intent(Intent.ACTION_DIAL,Uri.parse("tel:${bc.phone?.number.orEmpty()}"))
+            Barcode.TYPE_EMAIL -> Intent(Intent.ACTION_SENDTO,Uri.parse("mailto:${bc.email?.address.orEmpty()}"))
+            Barcode.TYPE_GEO -> Intent(Intent.ACTION_VIEW,Uri.parse("geo:${bc.geoPoint?.lat},${bc.geoPoint?.lng}"))
+            else -> null
+        }
+        if(intent!=null && runCatching { startActivity(intent) }.isSuccess) return
+        showQr(raw, null)
+    }
     private fun applyOrientationLock() {
         requestedOrientation=when { flexLandscape -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             lockPortrait -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -1599,7 +1659,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private fun finishBurst() { burstLimit=100; if(burstCount>0) { updateThumb(); showBanner("連写 $burstCount 枚を保存しました",1800) } }
     private fun onScan() {
         if(isRecording) { message("録画中はスキャンできません"); return }
-        choose("スキャン",listOf("書類（枠と傾きを自動で補正）","QR コード・バーコード")) { if(it==0) startScan() else startQr() }
+        startScan()
     }
     private fun startQr() {
         val opts=com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions.Builder().enableAutoZoom().build()
@@ -1675,8 +1735,9 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         sensors.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {sensors.registerListener(this,it,SensorManager.SENSOR_DELAY_UI)}
         if(hinge==null && resources.configuration.screenWidthDp<500 && rearSession==null) updateAngle(0f)
         handler.postDelayed(rearCheck,800)
+        handler.removeCallbacks(codeTick); if(autoCode) handler.postDelayed(codeTick,800)
     }
-    override fun onPause() {super.onPause();voice.stop();orientationListener?.disable();sensors.unregisterListener(this);countDown?.cancel();countDown=null;if(!photoBusy && !isRecording){setBusy(false);refreshInfo()} }
+    override fun onPause() {super.onPause();handler.removeCallbacks(codeTick);hideCode();voice.stop();orientationListener?.disable();sensors.unregisterListener(this);countDown?.cancel();countDown=null;if(!photoBusy && !isRecording){setBusy(false);refreshInfo()} }
     override fun onStop() {super.onStop();recording?.stop();if(slow!=null){closeSlow();slowClosedOnStop=true};handler.removeCallbacks(rearCheck);foldTrigger.reset()}
     override fun onStart() {
         super.onStart()
