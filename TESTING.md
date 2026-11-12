@@ -98,6 +98,18 @@ adb logcat -s ThetaHatch:* AndroidRuntime:E CameraX:W
 adb shell ls -lR /sdcard/DCIM/ThetaCamera /sdcard/Documents/ThetaCamera
 ```
 
+## 撮って返す（ほかの Hatch から呼ばれる）
+
+入口は `app.thetahatch.action.CAPTURE`（シリーズ仕様 §6.2）。権限 `app.thetahatch.permission.SHARE`（signature）で守っているので、**adb の `am start` からは開けない**（シェルは共通鍵で署名されていない）。Memo Hatch など共通鍵のアプリから試す。
+
+呼ばれている間は STATUS の `capture` に呼び元・モード・返す件数が出る。返したファイルはアプリの `cache/capture/` に残り、30 分より古いものは次の起動で消える。
+
+確かめること：
+- Memo の「写真を撮る」「スキャン」から開き、上に「↩ Memo Hatch へ」、下に「やめる｜写真｜動画｜スキャン｜完了（n）」が出る
+- 写真（HEIF・JPEG）・動画・スキャン（pdf／images）が Memo に届く。multiple のときは「完了」で返る
+- やめる・戻るで RESULT_CANCELED
+- 呼ばれたときは Camera Hatch のギャラリー・フォルダに残らない（設定「呼ばれたときも自分にも保存」ON なら残る）
+
 ## 人の手が要ること（ADB ではできない）
 
 - 開く・閉じる・半分折る（Flex モード、外画面で自撮り、外画面ライブ）
@@ -115,6 +127,7 @@ adb shell ls -lR /sdcard/DCIM/ThetaCamera /sdcard/Documents/ThetaCamera
 
 Fold5（SC-55D）で確かめたら、ここから消していく。
 
+- 撮って返す（上の節）
 - アプリ内アップデートの「更新あり」→ ダウンロード → インストールの流れ（最新版の上では試せない。設定 → アップデートの画面が出て、版 0.13.1 と自動確認 ON が表示されるところまでは確認）
 - HEIF を Mac（写真・プレビュー）で開いたときの表示範囲
 - HDR（シーン）の写りの差（設定がかかって撮れるところまでは確認）

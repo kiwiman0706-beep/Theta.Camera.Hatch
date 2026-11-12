@@ -103,6 +103,17 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private val recentErrors = ArrayDeque<String>()
     private var burstLimit = 100
     private var burstCrop: String? = null
+    // ===== 撮って返す（app.thetahatch.action.CAPTURE、spec §6.2） =====
+    private class CaptureReq(val source:String, val modes:List<String>, var mode:String, val multiple:Boolean, val scanFormat:String)
+    private var capture: CaptureReq? = null
+    private val captured = mutableListOf<Pair<java.io.File,String>>()   // 返すファイルと MIME
+    private var captureAlsoSave = false
+    private lateinit var captureBar: LinearLayout
+    private lateinit var captureDone: TextView
+    private val captureTabs = mutableMapOf<String,TextView>()
+    private lateinit var photoBox: View
+    private lateinit var videoBox: View
+    private lateinit var scanBox: View
     private var recordStartedAt = 0L
     private var heifClap = false     // 全体を HEIF で残し、画面の範囲を clap で表示
     private val meta by lazy { MetaStore(this) }
@@ -218,9 +229,16 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         audioEnabled = prefs.getBoolean("audio", true)
         lastUri = prefs.getString("lastUri", null)?.let(Uri::parse)
         lastVideo = prefs.getBoolean("lastVideo", false)
+        captureAlsoSave = prefs.getBoolean("captureAlsoSave", false)
+        parseCapture(intent)
+        cleanCaptureDir()
         buildUi()
         setupFold()
-        autoCheckUpdate()
+        if (capture == null) autoCheckUpdate()
+        if (capture != null) {
+            onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) { override fun handleOnBackPressed() = askCancelCapture() })
+            if (capture?.mode == "scan") handler.postDelayed({ if (capture?.mode == "scan" && captured.isEmpty()) startCaptureScan() }, 400)
+        }
         orientationListener = object : OrientationEventListener(this) {
             override fun onOrientationChanged(angle: Int) {
                 if (angle == ORIENTATION_UNKNOWN) return
@@ -326,7 +344,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         photoBtn=ShutterButton(this,ShutterButton.PHOTO); videoBtn=ShutterButton(this,ShutterButton.VIDEO); scanBtn=ShutterButton(this,ShutterButton.SCAN)
         val p=shutterItem(photoBtn,"写真（長押しで連写）",62) { onPhoto() }
         val v=shutterItem(videoBtn,"動画",74) { onVideo() }
-        val s=shutterItem(scanBtn,"スキャン（書類・QR）",50) { onScan() }
+        val s=shutterItem(scanBtn,"スキャン（書類・QR）",50) { if(capture!=null) startCaptureScan() else onScan() }
+        photoBox=p; videoBox=v; scanBox=s
         photoBtn.setOnLongClickListener { startBurst(); true }
         photoBtn.setOnTouchListener { _,e -> if(e.actionMasked==MotionEvent.ACTION_UP || e.actionMasked==MotionEvent.ACTION_CANCEL) burstActive=false; false }
         shutterBar=LinearLayout(this).apply { gravity=Gravity.CENTER; addView(p); addView(v); addView(s) }
@@ -347,6 +366,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         lastThumb=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; background=GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(60,0,0,0)); setStroke(dp(2),Color.WHITE) }; clipToOutline=true; setPadding(dp(2),dp(2),dp(2),dp(2)); contentDescription="直前の写真・動画を開く"; setOnClickListener { openLast() } }
         rotatables.add(lastThumb); rotatables.add(scanBtn)
         ui.addView(lastThumb,FrameLayout.LayoutParams(dp(46),dp(46),Gravity.BOTTOM or Gravity.START).apply { bottomMargin=dp(20); leftMargin=dp(6) })
+        if(capture!=null) buildCaptureUi()
         arrangeUi(); setHud(prefs.getBoolean("hud",false)); setContentView(root); updateThumb()
         val pinch=ScaleGestureDetector(this,object:ScaleGestureDetector.SimpleOnScaleGestureListener(){ override fun onScale(d:ScaleGestureDetector):Boolean { camera?.cameraInfo?.zoomState?.value?.let { zoomTo(it.zoomRatio*d.scaleFactor) }; return true } })
         val gestures=GestureDetector(this,object:GestureDetector.SimpleOnGestureListener(){
@@ -364,7 +384,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         hudShown=show; prefs.edit().putBoolean("hud",show).apply()
         val vis=if(show) View.VISIBLE else View.GONE
         hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; stripBox.visibility=vis; lastThumb.visibility=if(show) View.GONE else View.VISIBLE
-        if(show) { refreshStrip(); buildFolderRow(); refreshInfoBar() }
+        if(capture!=null) { stripBox.visibility=View.GONE; lastThumb.visibility=View.GONE }
+        else if(show) { refreshStrip(); buildFolderRow(); refreshInfoBar() }
         if(!show) evBar.visibility=View.GONE
         hudToggle.active=show
         updateRearUi()
@@ -377,6 +398,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         shutterBar.orientation=if(wide) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
         if(wide) ui.addView(shutterBar,at(Gravity.END or Gravity.CENTER_VERTICAL))
         else bottomBox.addView(shutterBar)
+        if(::captureBar.isInitialized) { (captureBar.parent as? ViewGroup)?.removeView(captureBar); bottomBox.addView(captureBar) }
     }
     private fun updateThumb() {
         val uri=lastUri ?: run { lastThumb.setImageDrawable(null); return }
@@ -665,7 +687,13 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         handler.removeCallbacks(slowTick)
         try {
             val uri=s.stop()
-            if(uri!=null) { meta.create(uri,videoName,slowFolder,slowEvent); saveLast(uri,true); updateThumb(); showBanner("スローモーションを保存しました",1500) }
+            if(uri!=null && capture!=null) {
+                // 撮って返す：返す用にコピーし、設定「自分にも保存」でなければギャラリーから消す
+                val f=java.io.File(captureDir(),videoName)
+                contentResolver.openInputStream(uri)?.use { i -> f.outputStream().use { o -> i.copyTo(o) } }
+                if(!captureAlsoSave) runCatching { contentResolver.delete(uri,null,null) } else meta.create(uri,videoName,slowFolder,slowEvent)
+                deliver(listOf(f to "video/mp4"))
+            } else if(uri!=null) { meta.create(uri,videoName,slowFolder,slowEvent); saveLast(uri,true); updateThumb(); showBanner("スローモーションを保存しました",1500) }
         } catch(e:Exception) { fail("スローモーション保存",e) }
         if(voiceOn) voice.start()
         videoBtn.isEnabled=true; setBusy(false); refreshInfo()
@@ -749,6 +777,17 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         }).build()
         val pair=cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG
         if(heifClap && !pair) { takeHeif(cap,basename); return }
+        if(capture!=null) {
+            // 撮って返す：ギャラリーには入れず、返す用のファイルに撮る
+            val f=java.io.File(captureDir(),"$basename.jpg")
+            try {
+                cap.takePicture(ImageCapture.OutputFileOptions.Builder(f).build(),main,object:ImageCapture.OnImageSavedCallback {
+                    override fun onImageSaved(r:ImageCapture.OutputFileResults) { photoBusy=false; setBusy(isRecording); refreshInfo(); alsoSaveImage(f,"image/jpeg"); deliver(listOf(f to "image/jpeg")) }
+                    override fun onError(e:ImageCaptureException) { photoBusy=false; setBusy(isRecording); refreshInfo(); fail("写真撮影",e) }
+                })
+            } catch(e:Exception) { photoBusy=false; setBusy(isRecording); fail("写真撮影",e) }
+            return
+        }
         var saved=0; var failed=false
         fun finish() {photoBusy=false;setBusy(isRecording);refreshInfo();tryAutoRear()}
         val callback=object:ImageCapture.OnImageSavedCallback {
@@ -789,13 +828,14 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                                 .setQuality(95).setRotation(rot).build()
                             wr.start(); wr.addBitmap(bmp); wr.stop(15000); wr.close(); bmp.recycle()
                             val out=HeifClap.insert(tmp.readBytes(),cw,ch); tmp.delete()
-                            writeImage(out,"$basename.heic","image/heic",dir) to "$basename.heic"
+                            storeImage(out,"$basename.heic","image/heic",dir) to "$basename.heic"
                         }.recoverCatching { e ->
                             noteError("HEIF 保存に失敗、JPEG で保存: ${e.message}")
-                            writeImage(jpeg,"$basename.jpg","image/jpeg",dir) to "$basename.jpg"
+                            storeImage(jpeg,"$basename.jpg","image/jpeg",dir) to "$basename.jpg"
                         } }
                         r.onSuccess { (uri,nm) -> uri?.let { meta.create(it,nm,folder,event).also { m -> m.crop="${cw}x${ch} / ${w}x${h}"; meta.changed(m) } }
-                            saveLast(uri,false); updateThumb(); showBanner(if(nm.endsWith(".heic")) "写真を保存しました（全体＋表示範囲）" else "写真を保存しました（JPEG）",1500) }
+                            if(uri!=null) { saveLast(uri,false); updateThumb() }
+                            if(capture==null) showBanner(if(nm.endsWith(".heic")) "写真を保存しました（全体＋表示範囲）" else "写真を保存しました（JPEG）",1500) }
                             .onFailure { fail("写真保存",Exception(it)) }
                         done()
                     }
@@ -803,6 +843,13 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 override fun onError(e:ImageCaptureException) { done(); fail("写真撮影",e) }
             })
         } catch(e:Exception) { done(); fail("写真撮影",e) }
+    }
+    /** 画像を保存する。撮って返すときは返す用のファイルにし、設定「自分にも保存」のときだけギャラリーにも。IO スレッドから呼ぶ */
+    private fun storeImage(bytes:ByteArray, name:String, mime:String, dir:String):Uri? {
+        if(capture==null) return writeImage(bytes,name,mime,dir)
+        val f=java.io.File(captureDir(),name); f.writeBytes(bytes)
+        runOnUiThread { deliver(listOf(f to mime)) }
+        return if(captureAlsoSave) writeImage(bytes,name,mime,dir) else null
     }
     private fun writeImage(bytes:ByteArray, name:String, mime:String, dir:String):Uri? {
         val uri=contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
@@ -818,8 +865,9 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         try {
             videoName=name()+".mp4"; val vFolder=saveFolder; val vEvent=currentEvent
             val values=ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,videoName); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir()) }
-            val output=MediaStoreOutputOptions.Builder(contentResolver,MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build()
-            var pending=cap.output.prepareRecording(this,output)
+            val vFile=if(capture!=null) java.io.File(captureDir(),videoName) else null
+            var pending=if(vFile!=null) cap.output.prepareRecording(this,FileOutputOptions.Builder(vFile).build())
+                else cap.output.prepareRecording(this,MediaStoreOutputOptions.Builder(contentResolver,MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build())
             val withAudio=audioEnabled && slowFps==0 && ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
             if(withAudio) pending=pending.withAudioEnabled()
             recording=pending.start(main) { event ->
@@ -830,7 +878,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                     is VideoRecordEvent.Finalize -> {
                         if(voiceOn) voice.start()
                         recording=null; videoBtn.isEnabled=true; setBusy(false)
-                        if(!event.hasError()) { meta.create(event.outputResults.outputUri,videoName,vFolder,vEvent); saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
+                        if(!event.hasError() && vFile!=null) { alsoSaveVideo(vFile); deliver(listOf(vFile to "video/mp4")) }
+                        else if(!event.hasError()) { meta.create(event.outputResults.outputUri,videoName,vFolder,vEvent); saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
                         else {lastError="動画終了エラー ${event.error}: ${event.cause?.message}"; noteError(lastError); message(lastError)}
                         refreshInfo()
                         if(videoOnly) { videoOnly=false; bindCamera() } else tryAutoRear()
@@ -888,6 +937,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         if(formats.contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR)) items.add(6,"Ultra HDR写真：${if(ultraHdr) "ON" else "OFF"}" to { ultraHdr=!ultraHdr; if(ultraHdr) rawJpeg=false; bindCamera() })
         if(formats.contains(ImageCapture.OUTPUT_FORMAT_RAW_JPEG)) items.add(6,"RAW+JPEG：${if(rawJpeg) "ON" else "OFF"}" to { rawJpeg=!rawJpeg; if(rawJpeg){ultraHdr=false;extensionMode=ExtensionMode.NONE;sceneHdr=false}; bindCamera() })
         items.addAll(listOf<Pair<String,()->Unit>>(
+            "ほかの Hatch に呼ばれたときも自分にも保存：${if(captureAlsoSave) "ON" else "OFF"}" to { captureAlsoSave=!captureAlsoSave; prefs.edit().putBoolean("captureAlsoSave",captureAlsoSave).apply() },
             "外画面ライブにシャッターも出す：${if(coverShutter) "ON" else "OFF"}" to { coverShutter=!coverShutter; prefs.edit().putBoolean("coverShutter",coverShutter).apply(); if(coverSession!=null) { stopCover(); startCover() } },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
             "画面の向き：${if(lockPortrait) "縦に固定（アイコンだけ回る）" else "端末に合わせて回る"}" to { lockPortrait=!lockPortrait; prefs.edit().putBoolean("lockPortrait",lockPortrait).apply(); flexLandscape=false; applyOrientationLock(); rotateUi() },
@@ -1242,6 +1292,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 .put("coverPresent",presentStatus.toString()).put("coverLive",coverSession!=null))
             .put("ui",J().put("hud",hudShown).put("voiceShutter",voiceOn).put("saveFolder",saveFolder).put("folders",org.json.JSONArray(folders))
                 .put("event",meta.event(currentEvent)?.let { meta.label(it) } ?: JSONObjectNull).put("lastUri",lastUri?.toString() ?: JSONObjectNull))
+            .put("capture",capture?.let { c -> org.json.JSONObject().put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
             .put("errors",org.json.JSONArray(recentErrors.toList()))
     }
     private val JSONObjectNull: Any get() = org.json.JSONObject.NULL
@@ -1309,6 +1360,119 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             else -> 1 to org.json.JSONObject().put("error","unknown command")
         }
     }
+    // ===== 撮って返す（app.thetahatch.action.CAPTURE） =====
+    private fun parseCapture(i:Intent?) {
+        if(i?.action!="app.thetahatch.action.CAPTURE") return
+        val all=listOf("photo","video","scan")
+        val asked=i.getStringArrayExtra("modes")?.toList() ?: runCatching { i.getStringArrayListExtra("modes") }.getOrNull() ?: i.getStringExtra("modes")?.split(',')?.map { it.trim() }
+        val modes=all.filter { asked==null || it in asked }.ifEmpty { all }
+        val mode=i.getStringExtra("mode")?.takeIf { it in modes } ?: if("photo" in modes) "photo" else modes.first()
+        capture=CaptureReq(i.getStringExtra("source") ?: "", modes, mode, i.getBooleanExtra("multiple",false), if(i.getStringExtra("scanFormat")=="images") "images" else "pdf")
+        rawJpeg=false   // RAW は返せないので JPEG だけ
+    }
+    private fun captureDir()=java.io.File(cacheDir,"capture").apply { mkdirs() }
+    /** 返したファイルは呼んだアプリがコピーし終えるまで残す。30 分より古いものを、次に起動したときに消す */
+    private fun cleanCaptureDir() { runCatching { captureDir().listFiles()?.filter { System.currentTimeMillis()-it.lastModified()>30*60*1000L }?.forEach { it.delete() } } }
+    private fun sourceName():String { val id=capture?.source.orEmpty(); return if(id.isBlank()) "呼んだアプリ" else id.replaceFirstChar { it.uppercase() }+" Hatch" }
+    private fun buildCaptureUi() {
+        val c=capture ?: return
+        // 上：どこへ返すかの帯
+        ui.addView(TextView(this).apply { text="↩ ${sourceName()} へ"; textSize=14f; setTextColor(Color.WHITE); typeface=Typeface.DEFAULT_BOLD
+            background=round(Color.argb(170,0,0,0),18); setPadding(dp(16),dp(8),dp(16),dp(8)); contentDescription="${sourceName()} へ返します" },
+            at(Gravity.TOP or Gravity.CENTER_HORIZONTAL,t=4))
+        // 下：やめる｜写真｜動画｜スキャン｜完了（n）
+        fun pill(t:String, onClick:()->Unit)=shadowText(t,13f).apply { setPadding(dp(14),0,dp(14),0); minHeight=dp(40); gravity=Gravity.CENTER; setOnClickListener { onClick() } }
+        captureBar=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(0,dp(6),0,0) }
+        captureBar.addView(pill("やめる") { askCancelCapture() })
+        val tabs=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; background=round(Color.argb(110,0,0,0),20); setPadding(dp(3),dp(3),dp(3),dp(3)) }
+        mapOf("photo" to "写真","video" to "動画","scan" to "スキャン").filterKeys { it in c.modes }.forEach { (m,label) ->
+            val t=pill(label) { setCaptureMode(m) }; captureTabs[m]=t; tabs.addView(t,LinearLayout.LayoutParams(-2,dp(36))) }
+        if(c.modes.size>1) captureBar.addView(tabs,LinearLayout.LayoutParams(-2,-2).apply { setMargins(dp(8),0,dp(8),0) })
+        captureDone=pill("完了（0）") { finishCapture() }
+        captureBar.addView(captureDone)
+        captureDone.visibility=if(c.multiple) View.VISIBLE else View.GONE
+        updateCaptureUi()
+    }
+    private fun setCaptureMode(m:String) {
+        val c=capture ?: return
+        if(isRecording || burstActive) { message("撮影が終わってから切り替えてください"); return }
+        c.mode=m; updateCaptureUi()
+        if(m=="scan" && captured.isEmpty()) startCaptureScan()
+    }
+    private fun updateCaptureUi() {
+        val c=capture ?: return
+        photoBox.visibility=if(c.mode=="photo") View.VISIBLE else View.GONE
+        videoBox.visibility=if(c.mode=="video") View.VISIBLE else View.GONE
+        scanBox.visibility=if(c.mode=="scan") View.VISIBLE else View.GONE
+        captureTabs.forEach { (m,t) -> val on=m==c.mode; t.background=if(on) round(Color.WHITE,17) else null; t.setTextColor(if(on) Color.BLACK else Color.WHITE); t.setShadowLayer(if(on) 0f else 6f,0f,1f,Color.BLACK) }
+        captureDone.text="完了（${captured.size}）"; captureDone.isEnabled=captured.isNotEmpty(); captureDone.alpha=if(captured.isNotEmpty()) 1f else 0.5f
+    }
+    /** 撮れたものを足す。1 つだけ返すときはすぐ返す */
+    private fun deliver(items:List<Pair<java.io.File,String>>) {
+        val c=capture ?: return
+        if(items.isEmpty()) return
+        captured.addAll(items)
+        if(!c.multiple) { finishCapture(); return }
+        updateCaptureUi(); showBanner("${captured.size} 件（「完了」で ${sourceName()} へ）",1200)
+    }
+    private fun finishCapture() {
+        if(captured.isEmpty()) { cancelCapture(); return }
+        val auth="$packageName.files"
+        val uris=captured.map { androidx.core.content.FileProvider.getUriForFile(this,auth,it.first) }
+        val clip=android.content.ClipData(android.content.ClipDescription("Theta Camera Hatch",captured.map { it.second }.distinct().toTypedArray()),android.content.ClipData.Item(uris[0]))
+        uris.drop(1).forEach { clip.addItem(android.content.ClipData.Item(it)) }
+        val data=Intent().apply { setDataAndType(uris[0],captured[0].second); clipData=clip; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); putExtra("count",uris.size) }
+        android.util.Log.i(app.thetahatch.adb.AdbBridge.TAG,"capture: return ${uris.size} to ${capture?.source}")
+        setResult(RESULT_OK,data); finish()
+    }
+    private fun cancelCapture() { captured.forEach { it.first.delete() }; captured.clear(); setResult(RESULT_CANCELED); finish() }
+    private fun askCancelCapture() {
+        if(captured.isEmpty()) { cancelCapture(); return }
+        android.app.AlertDialog.Builder(this).setTitle("${sourceName()} へ返しますか？").setMessage("撮った ${captured.size} 件があります。")
+            .setPositiveButton("返す") { _,_ -> finishCapture() }.setNegativeButton("捨ててやめる") { _,_ -> cancelCapture() }.setNeutralButton("続ける",null).show()
+    }
+    /** スキャン：端の検出と補正は ML Kit。scanFormat に合わせて PDF（1 つ）か ページごとの JPEG で返す */
+    private fun startCaptureScan() {
+        val c=capture ?: return
+        if(isRecording) { message("録画中はスキャンできません"); return }
+        val f=com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_PDF
+        val j=com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.RESULT_FORMAT_JPEG
+        val opts=com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.Builder().setGalleryImportAllowed(true)
+            .setResultFormats(if(c.scanFormat=="images") j else f).setScannerMode(com.google.mlkit.vision.documentscanner.GmsDocumentScannerOptions.SCANNER_MODE_FULL).build()
+        com.google.mlkit.vision.documentscanner.GmsDocumentScanning.getClient(opts).getStartScanIntent(this)
+            .addOnSuccessListener { captureScanLauncher.launch(androidx.activity.result.IntentSenderRequest.Builder(it).build()) }
+            .addOnFailureListener { message("スキャナーを起動できません（Google Play 開発者サービスが必要）：${it.message}") }
+    }
+    private val captureScanLauncher = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        if(r.resultCode!=RESULT_OK) return@registerForActivityResult
+        val res=com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult.fromActivityResultIntent(r.data) ?: return@registerForActivityResult
+        val c=capture ?: return@registerForActivityResult
+        lifecycleScope.launch {
+            val out=withContext(Dispatchers.IO) { runCatching {
+                val base="Scan_"+SimpleDateFormat("yyyyMMdd_HHmmss",Locale.US).format(Date())
+                fun copy(src:Uri,name:String):java.io.File { val f=java.io.File(captureDir(),name); contentResolver.openInputStream(src)?.use { i -> f.outputStream().use { o -> i.copyTo(o) } }; return f }
+                val list=if(c.scanFormat=="images") (res.pages ?: emptyList()).mapIndexed { n,pg -> copy(pg.imageUri,"${base}_p${n+1}.jpg") to "image/jpeg" }
+                    else listOfNotNull(res.pdf?.let { copy(it.uri,"$base.pdf") to "application/pdf" })
+                if(captureAlsoSave) runCatching { saveScan(res) }
+                list
+            } }
+            out.onSuccess { deliver(it) }.onFailure { message("スキャンを受け取れません：${it.message}") }
+        }
+    }
+    private fun alsoSaveImage(f:java.io.File, mime:String) {
+        if(!captureAlsoSave) return
+        val folder=saveFolder; val event=currentEvent; val dir=saveDir()
+        lifecycleScope.launch(Dispatchers.IO) { runCatching { writeImage(f.readBytes(),f.name,mime,dir)?.let { meta.create(it,f.name,folder,event) } } }
+    }
+    private fun alsoSaveVideo(f:java.io.File) {
+        if(!captureAlsoSave) return
+        val folder=saveFolder; val event=currentEvent; val dir=saveDir()
+        lifecycleScope.launch(Dispatchers.IO) { runCatching {
+            val uri=contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,f.name); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,dir) }) ?: return@runCatching
+            contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } }
+            meta.create(uri,f.name,folder,event)
+        } }
+    }
     private fun applyOrientationLock() {
         requestedOrientation=when { flexLandscape -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             lockPortrait -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -1350,6 +1514,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val cap=imageCapture ?: run { message("この状態では連写できません"); return }
         if(photoBusy || countDown!=null || burstActive) return
         if(cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG) { message("RAW+JPEG では連写できません"); return }
+        if(capture!=null && capture?.multiple!=true) { message("1 枚だけ返すときは連写できません"); return }
         // HEIF（全体を残す）のときは連写の JPEG も全体のまま。画面に見えていた範囲をサイドカーに残す
         burstCrop=if(heifClap) runCatching {
             val res=cap.resolutionInfo!!; val sz=res.resolution
@@ -1365,12 +1530,13 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val cap=imageCapture
         if(!burstActive || cap==null || burstCount>=burstLimit) { burstActive=false; finishBurst(); return }
         val bname="${burstBase}_B${(burstCount+1).toString().padStart(3,'0')}.jpg"
-        val opts=ImageCapture.OutputFileOptions.Builder(contentResolver,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
+        val bFile=if(capture!=null) java.io.File(captureDir(),bname) else null
+        val opts=if(bFile!=null) ImageCapture.OutputFileOptions.Builder(bFile).build() else ImageCapture.OutputFileOptions.Builder(contentResolver,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,ContentValues().apply {
             put(MediaStore.MediaColumns.DISPLAY_NAME,bname); put(MediaStore.MediaColumns.MIME_TYPE,"image/jpeg"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir())
         }).build()
         try {
             cap.takePicture(opts,main,object:ImageCapture.OnImageSavedCallback {
-                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; r.savedUri?.let { u -> meta.create(u,bname,saveFolder,currentEvent).also { m -> burstCrop?.let { m.crop=it; meta.changed(m) } } }; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
+                override fun onImageSaved(r:ImageCapture.OutputFileResults) { burstCount++; if(bFile!=null) { alsoSaveImage(bFile,"image/jpeg"); deliver(listOf(bFile to "image/jpeg")) } else r.savedUri?.let { u -> meta.create(u,bname,saveFolder,currentEvent).also { m -> burstCrop?.let { m.crop=it; meta.changed(m) } } }; saveLast(r.savedUri,false); showBanner("連写 $burstCount 枚",900); shootBurst() }
                 override fun onError(e:ImageCaptureException) { burstActive=false; finishBurst(); fail("連写",e) }
             })
         } catch(e:Exception) { burstActive=false; finishBurst(); fail("連写",e) }
@@ -1469,7 +1635,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         Sensor.TYPE_ACCELEROMETER -> {if(overlay.level){overlay.roll=(atan2(e.values[0],e.values[1])*180/Math.PI).toFloat();overlay.invalidate()}}
     } }
     override fun onAccuracyChanged(s:Sensor?,accuracy:Int){}
-    override fun onKeyDown(keyCode:Int,event:KeyEvent):Boolean {if(keyCode==KeyEvent.KEYCODE_VOLUME_UP || keyCode==KeyEvent.KEYCODE_VOLUME_DOWN){if(event.repeatCount==0)onPhoto();return true};return super.onKeyDown(keyCode,event)}
+    override fun onKeyDown(keyCode:Int,event:KeyEvent):Boolean {if(keyCode==KeyEvent.KEYCODE_VOLUME_UP || keyCode==KeyEvent.KEYCODE_VOLUME_DOWN){if(event.repeatCount==0) when(capture?.mode) { "video" -> onVideo(); "scan" -> startCaptureScan(); else -> onPhoto() };return true};return super.onKeyDown(keyCode,event)}
     override fun onKeyUp(keyCode:Int,event:KeyEvent):Boolean {if(keyCode==KeyEvent.KEYCODE_VOLUME_UP || keyCode==KeyEvent.KEYCODE_VOLUME_DOWN)return true;return super.onKeyUp(keyCode,event)}
 }
 

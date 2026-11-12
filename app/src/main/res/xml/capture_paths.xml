@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 撮って返す（app.thetahatch.action.CAPTURE）で呼んだアプリに渡すファイル。アプリの cache/capture/ だけを公開 -->
+<paths>
+    <cache-path name="capture" path="capture/" />
+</paths>
