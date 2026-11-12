@@ -106,6 +106,11 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     // ===== 撮って返す（app.thetahatch.action.CAPTURE、spec §6.2） =====
     private class CaptureReq(val source:String, val modes:List<String>, var mode:String, val multiple:Boolean, val scanFormat:String)
     private var capture: CaptureReq? = null
+    /** Android 標準の「撮って返す」（IMAGE_CAPTURE・VIDEO_CAPTURE）。output は呼んだアプリが指定した保存先 */
+    private class SysCapture(val kind:String, val output:Uri?, val durationMs:Long, val sizeLimit:Long)
+    private var sysCapture: SysCapture? = null
+    /** ロック画面から開かれた（ロックを解除せずに撮る）。ほかの写真やフォルダは見せない */
+    private var secureMode = false
     private val captured = mutableListOf<Pair<java.io.File,String>>()   // 返すファイルと MIME
     private var captureAlsoSave = false
     private lateinit var captureBar: LinearLayout
@@ -234,7 +239,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         cleanCaptureDir()
         buildUi()
         setupFold()
-        if (capture == null) autoCheckUpdate()
+        if (capture == null && !secureMode) autoCheckUpdate()
         if (capture != null) {
             onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) { override fun handleOnBackPressed() = askCancelCapture() })
             if (capture?.mode == "scan") handler.postDelayed({ if (capture?.mode == "scan" && captured.isEmpty()) startCaptureScan() }, 400)
@@ -384,7 +389,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         hudShown=show; prefs.edit().putBoolean("hud",show).apply()
         val vis=if(show) View.VISIBLE else View.GONE
         hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; stripBox.visibility=vis; lastThumb.visibility=if(show) View.GONE else View.VISIBLE
-        if(capture!=null) { stripBox.visibility=View.GONE; lastThumb.visibility=View.GONE }
+        if(capture!=null || secureMode) { stripBox.visibility=View.GONE; lastThumb.visibility=View.GONE }
+        if(secureMode) settingsChip.visibility=View.GONE
         else if(show) { refreshStrip(); buildFolderRow(); refreshInfoBar() }
         if(!show) evBar.visibility=View.GONE
         hudToggle.active=show
@@ -776,7 +782,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             put(MediaStore.MediaColumns.DISPLAY_NAME,basename+ext);put(MediaStore.MediaColumns.MIME_TYPE,mime);put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir())
         }).build()
         val pair=cap.outputFormat==ImageCapture.OUTPUT_FORMAT_RAW_JPEG
-        if(heifClap && !pair) { takeHeif(cap,basename); return }
+        if(heifClap && !pair && sysCapture==null) { takeHeif(cap,basename); return }
         if(capture!=null) {
             // 撮って返す：ギャラリーには入れず、返す用のファイルに撮る
             val f=java.io.File(captureDir(),"$basename.jpg")
@@ -866,7 +872,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             videoName=name()+".mp4"; val vFolder=saveFolder; val vEvent=currentEvent
             val values=ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,videoName); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir()) }
             val vFile=if(capture!=null) java.io.File(captureDir(),videoName) else null
-            var pending=if(vFile!=null) cap.output.prepareRecording(this,FileOutputOptions.Builder(vFile).build())
+            var pending=if(vFile!=null) cap.output.prepareRecording(this,FileOutputOptions.Builder(vFile).apply {
+                    sysCapture?.let { sc -> if(sc.durationMs>0) setDurationLimitMillis(sc.durationMs); if(sc.sizeLimit>0) setFileSizeLimit(sc.sizeLimit) } }.build())
                 else cap.output.prepareRecording(this,MediaStoreOutputOptions.Builder(contentResolver,MediaStore.Video.Media.EXTERNAL_CONTENT_URI).setContentValues(values).build())
             val withAudio=audioEnabled && slowFps==0 && ContextCompat.checkSelfPermission(this,Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED
             if(withAudio) pending=pending.withAudioEnabled()
@@ -878,7 +885,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                     is VideoRecordEvent.Finalize -> {
                         if(voiceOn) voice.start()
                         recording=null; videoBtn.isEnabled=true; setBusy(false)
-                        if(!event.hasError() && vFile!=null) { alsoSaveVideo(vFile); deliver(listOf(vFile to "video/mp4")) }
+                        val limitReached=event.error==VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED || event.error==VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED
+                        if((!event.hasError() || limitReached) && vFile!=null) { if(sysCapture==null) alsoSaveVideo(vFile); deliver(listOf(vFile to "video/mp4")) }
                         else if(!event.hasError()) { meta.create(event.outputResults.outputUri,videoName,vFolder,vEvent); saveLast(event.outputResults.outputUri,true); updateThumb(); showBanner("動画を保存しました",1500) }
                         else {lastError="動画終了エラー ${event.error}: ${event.cause?.message}"; noteError(lastError); message(lastError)}
                         refreshInfo()
@@ -889,7 +897,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         } catch(e:Exception) {recording=null; setBusy(false); videoBtn.isEnabled=true; fail("録画開始",e); refreshInfo()}
     }
     private fun saveLast(uri:Uri?,isVideo:Boolean) { if(uri==null || uri==Uri.EMPTY) return; lastUri=uri; lastVideo=isVideo; prefs.edit().putString("lastUri",uri.toString()).putBoolean("lastVideo",isVideo).apply() }
-    private fun openLast() { val uri=lastUri ?: run {message("撮影すると、ここから直前の写真・動画を開けます");return}; try {startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,if(lastVideo) "video/*" else "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))} catch(e:Exception){message("表示できません。ギャラリーのThetaCameraフォルダを確認してください")} }
+    private fun openLast() { if(secureMode) { message("ロックを解除すると見られます"); return }; val uri=lastUri ?: run {message("撮影すると、ここから直前の写真・動画を開けます");return}; try {startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri,if(lastVideo) "video/*" else "image/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))} catch(e:Exception){message("表示できません。ギャラリーのThetaCameraフォルダを確認してください")} }
     private fun choose(title:String,items:List<String>,action:(Int)->Unit) { android.app.AlertDialog.Builder(this).setTitle(title).setItems(items.toTypedArray()){_,which->action(which)}.setNegativeButton("閉じる",null).show() }
     private fun modeName(m:Int)=when(m){ExtensionMode.AUTO->"メーカー自動";ExtensionMode.HDR->"HDR";ExtensionMode.NIGHT->"夜景";ExtensionMode.BOKEH->"ポートレート";ExtensionMode.FACE_RETOUCH->"美肌";else->"標準"}
     private fun qualityName(q:Quality)=when(q){Quality.UHD->"4K";Quality.FHD->"1080p";Quality.HD->"720p";Quality.SD->"SD";else->q.toString()}
@@ -1292,7 +1300,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 .put("coverPresent",presentStatus.toString()).put("coverLive",coverSession!=null))
             .put("ui",J().put("hud",hudShown).put("voiceShutter",voiceOn).put("saveFolder",saveFolder).put("folders",org.json.JSONArray(folders))
                 .put("event",meta.event(currentEvent)?.let { meta.label(it) } ?: JSONObjectNull).put("lastUri",lastUri?.toString() ?: JSONObjectNull))
-            .put("capture",capture?.let { c -> org.json.JSONObject().put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
+            .put("secureMode",secureMode).put("capture",capture?.let { c -> org.json.JSONObject().put("system",sysCapture?.kind ?: JSONObjectNull).put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
             .put("errors",org.json.JSONArray(recentErrors.toList()))
     }
     private val JSONObjectNull: Any get() = org.json.JSONObject.NULL
@@ -1362,7 +1370,18 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     // ===== 撮って返す（app.thetahatch.action.CAPTURE） =====
     private fun parseCapture(i:Intent?) {
-        if(i?.action!="app.thetahatch.action.CAPTURE") return
+        val act=i?.action
+        secureMode=act==MediaStore.ACTION_IMAGE_CAPTURE_SECURE || act==MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA_SECURE
+        if(secureMode) { setShowWhenLocked(true); setTurnScreenOn(true) }
+        if(act==MediaStore.ACTION_IMAGE_CAPTURE || act==MediaStore.ACTION_IMAGE_CAPTURE_SECURE || act==MediaStore.ACTION_VIDEO_CAPTURE) {
+            val video=act==MediaStore.ACTION_VIDEO_CAPTURE
+            val out=androidx.core.content.IntentCompat.getParcelableExtra(i,MediaStore.EXTRA_OUTPUT,Uri::class.java)
+            sysCapture=SysCapture(if(video) "video" else "image",out,i.getIntExtra(MediaStore.EXTRA_DURATION_LIMIT,0)*1000L,i.getLongExtra(MediaStore.EXTRA_SIZE_LIMIT,0L))
+            capture=CaptureReq("",listOf(if(video) "video" else "photo"),if(video) "video" else "photo",false,"pdf")
+            rawJpeg=false
+            return
+        }
+        if(act!="app.thetahatch.action.CAPTURE") return
         val all=listOf("photo","video","scan")
         val asked=i.getStringArrayExtra("modes")?.toList() ?: runCatching { i.getStringArrayListExtra("modes") }.getOrNull() ?: i.getStringExtra("modes")?.split(',')?.map { it.trim() }
         val modes=all.filter { asked==null || it in asked }.ifEmpty { all }
@@ -1373,7 +1392,9 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private fun captureDir()=java.io.File(cacheDir,"capture").apply { mkdirs() }
     /** 返したファイルは呼んだアプリがコピーし終えるまで残す。30 分より古いものを、次に起動したときに消す */
     private fun cleanCaptureDir() { runCatching { captureDir().listFiles()?.filter { System.currentTimeMillis()-it.lastModified()>30*60*1000L }?.forEach { it.delete() } } }
-    private fun sourceName():String { val id=capture?.source.orEmpty(); return if(id.isBlank()) "呼んだアプリ" else id.replaceFirstChar { it.uppercase() }+" Hatch" }
+    private fun sourceName():String {
+        if(sysCapture!=null) return callingActivity?.packageName?.let { pkg -> runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg,0)).toString() }.getOrNull() } ?: "呼んだアプリ"
+        val id=capture?.source.orEmpty(); return if(id.isBlank()) "呼んだアプリ" else id.replaceFirstChar { it.uppercase() }+" Hatch" }
     private fun buildCaptureUi() {
         val c=capture ?: return
         // 上：どこへ返すかの帯
@@ -1416,6 +1437,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         updateCaptureUi(); showBanner("${captured.size} 件（「完了」で ${sourceName()} へ）",1200)
     }
     private fun finishCapture() {
+        sysCapture?.let { finishSystemCapture(it); return }
         if(captured.isEmpty()) { cancelCapture(); return }
         val auth="$packageName.files"
         val uris=captured.map { androidx.core.content.FileProvider.getUriForFile(this,auth,it.first) }
@@ -1424,6 +1446,39 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val data=Intent().apply { setDataAndType(uris[0],captured[0].second); clipData=clip; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); putExtra("count",uris.size) }
         android.util.Log.i(app.thetahatch.adb.AdbBridge.TAG,"capture: return ${uris.size} to ${capture?.source}")
         setResult(RESULT_OK,data); finish()
+    }
+    /**
+     * Android 標準の「撮って返す」の返し方：
+     * EXTRA_OUTPUT があればそこへ書いて RESULT_OK。無ければ写真は小さい Bitmap（extra "data"）、動画はギャラリーに保存してその URI。
+     */
+    private fun finishSystemCapture(sc:SysCapture) {
+        val (f,_)=captured.last()
+        lifecycleScope.launch {
+            val r=withContext(Dispatchers.IO) { runCatching {
+                val out=sc.output
+                when {
+                    out!=null -> { (contentResolver.openOutputStream(out,"wt") ?: contentResolver.openOutputStream(out) ?: error("保存先に書けません")).use { o -> f.inputStream().use { it.copyTo(o) } }
+                        if(sc.kind=="video") Intent().setData(out) else Intent() }
+                    sc.kind=="image" -> Intent().putExtra("data",smallBitmap(f))
+                    else -> { val uri=contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,f.name); put(MediaStore.MediaColumns.MIME_TYPE,"video/mp4"); put(MediaStore.MediaColumns.RELATIVE_PATH,saveDir()) }) ?: error("保存できません")
+                        contentResolver.openOutputStream(uri)?.use { o -> f.inputStream().use { it.copyTo(o) } }
+                        Intent().setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                }
+            } }
+            r.onSuccess { setResult(RESULT_OK,it) }.onFailure { noteError("撮って返す（端末のカメラとして）: ${it.message}"); setResult(RESULT_CANCELED) }
+            captured.forEach { it.first.delete() }; captured.clear()
+            finish()
+        }
+    }
+    /** 返す用の小さい写真（長い辺 512 程度、向きを直す） */
+    private fun smallBitmap(f:java.io.File):android.graphics.Bitmap {
+        val o=BitmapFactory.Options().apply { inJustDecodeBounds=true }; BitmapFactory.decodeFile(f.path,o)
+        var sample=1; while(maxOf(o.outWidth,o.outHeight)/sample>1024) sample*=2
+        val bmp=BitmapFactory.decodeFile(f.path,BitmapFactory.Options().apply { inSampleSize=sample }) ?: error("写真を読めません")
+        val deg=when(android.media.ExifInterface(f.path).getAttributeInt(android.media.ExifInterface.TAG_ORIENTATION,1)) { 6 -> 90f; 3 -> 180f; 8 -> 270f; else -> 0f }
+        val scale=minOf(1f,512f/maxOf(bmp.width,bmp.height))
+        val m=Matrix().apply { postScale(scale,scale); postRotate(deg) }
+        return android.graphics.Bitmap.createBitmap(bmp,0,0,bmp.width,bmp.height,m,true)
     }
     private fun cancelCapture() { captured.forEach { it.first.delete() }; captured.clear(); setResult(RESULT_CANCELED); finish() }
     private fun askCancelCapture() {
