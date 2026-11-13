@@ -105,9 +105,10 @@ adb shell ls -lR /sdcard/DCIM/ThetaCamera /sdcard/Documents/ThetaCamera
 呼ばれている間は STATUS の `capture` に呼び元・モード・返す件数が出る。返したファイルはアプリの `cache/capture/` に残り、30 分より古いものは次の起動で消える。
 
 確かめること：
-- Memo の「写真を撮る」「スキャン」から開き、上に「↩ Memo Hatch へ」、下に「やめる｜写真｜動画｜スキャン｜完了（n）」が出る
+- Memo の「写真を撮る」「スキャン」から開き、上に「↩ Memo Hatch へ」、下に「やめる」「完了（n）」と、modes で許されたシャッター（写真・動画・スキャン）が全部並ぶ（0.15.1 からタブなし。録画中の写真も撮れる）
+- 「完了」を押さずに戻る・ホームに出る・最近のアプリから閉じても、撮った分が RESULT_OK＋ClipData で返る。消えるのは「捨てる」を 2 回選んだときだけ
 - 写真（HEIF・JPEG）・動画・スキャン（pdf／images）が Memo に届く。multiple のときは「完了」で返る
-- やめる・戻るで RESULT_CANCELED
+- 何も撮らずにやめる・戻ると RESULT_CANCELED
 - 呼ばれたときは Camera Hatch のギャラリー・フォルダに残らない（設定「呼ばれたときも自分にも保存」ON なら残る）
 
 ## 人の手が要ること（ADB ではできない）

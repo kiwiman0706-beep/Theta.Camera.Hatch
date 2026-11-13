@@ -251,7 +251,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         setupFold()
         if (capture == null && !secureMode) autoCheckUpdate()
         if (capture != null) {
-            onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) { override fun handleOnBackPressed() = askCancelCapture() })
+            onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) { override fun handleOnBackPressed() = if (captured.isNotEmpty() && sysCapture == null) finishCapture() else cancelCapture() })
             if (capture?.mode == "scan") handler.postDelayed({ if (capture?.mode == "scan" && captured.isEmpty()) startCaptureScan() }, 400)
         }
         orientationListener = object : OrientationEventListener(this) {
@@ -1416,14 +1416,11 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         ui.addView(TextView(this).apply { text="↩ ${sourceName()} へ"; textSize=14f; setTextColor(Color.WHITE); typeface=Typeface.DEFAULT_BOLD
             background=round(Color.argb(170,0,0,0),18); setPadding(dp(16),dp(8),dp(16),dp(8)); contentDescription="${sourceName()} へ返します" },
             at(Gravity.TOP or Gravity.CENTER_HORIZONTAL,t=4))
-        // 下：やめる｜写真｜動画｜スキャン｜完了（n）
+        // 下：やめる ……（シャッターは許されたものを全部出す）…… 完了（n）
         fun pill(t:String, onClick:()->Unit)=shadowText(t,13f).apply { setPadding(dp(14),0,dp(14),0); minHeight=dp(40); gravity=Gravity.CENTER; setOnClickListener { onClick() } }
         captureBar=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; setPadding(0,dp(6),0,0) }
         captureBar.addView(pill("やめる") { askCancelCapture() })
-        val tabs=LinearLayout(this).apply { gravity=Gravity.CENTER_VERTICAL; background=round(Color.argb(110,0,0,0),20); setPadding(dp(3),dp(3),dp(3),dp(3)) }
-        mapOf("photo" to "写真","video" to "動画","scan" to "スキャン").filterKeys { it in c.modes }.forEach { (m,label) ->
-            val t=pill(label) { setCaptureMode(m) }; captureTabs[m]=t; tabs.addView(t,LinearLayout.LayoutParams(-2,dp(36))) }
-        if(c.modes.size>1) captureBar.addView(tabs,LinearLayout.LayoutParams(-2,-2).apply { setMargins(dp(8),0,dp(8),0) })
+        captureBar.addView(View(this),LinearLayout.LayoutParams(dp(40),1))
         captureDone=pill("完了（0）") { finishCapture() }
         captureBar.addView(captureDone)
         captureDone.visibility=if(c.multiple) View.VISIBLE else View.GONE
@@ -1437,9 +1434,10 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     }
     private fun updateCaptureUi() {
         val c=capture ?: return
-        photoBox.visibility=if(c.mode=="photo") View.VISIBLE else View.GONE
-        videoBox.visibility=if(c.mode=="video") View.VISIBLE else View.GONE
-        scanBox.visibility=if(c.mode=="scan") View.VISIBLE else View.GONE
+        // ふつうのカメラと同じく、許されたシャッターを全部出す（タブを切り替えずに写真も動画も撮れる。録画中の写真も）
+        photoBox.visibility=if("photo" in c.modes) View.VISIBLE else View.GONE
+        videoBox.visibility=if("video" in c.modes) View.VISIBLE else View.GONE
+        scanBox.visibility=if("scan" in c.modes) View.VISIBLE else View.GONE
         captureTabs.forEach { (m,t) -> val on=m==c.mode; t.background=if(on) round(Color.WHITE,17) else null; t.setTextColor(if(on) Color.BLACK else Color.WHITE); t.setShadowLayer(if(on) 0f else 6f,0f,1f,Color.BLACK) }
         captureDone.text="完了（${captured.size}）"; captureDone.isEnabled=captured.isNotEmpty(); captureDone.alpha=if(captured.isNotEmpty()) 1f else 0.5f
     }
@@ -1448,19 +1446,30 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val c=capture ?: return
         if(items.isEmpty()) return
         captured.addAll(items)
+        // 撮るたびに結果を入れておく。「完了」を押さずに戻る・ホームに出る・閉じるときも、撮った分が返る
+        if(sysCapture==null) captureResult()?.let { setResult(RESULT_OK,it) }
         if(!c.multiple) { finishCapture(); return }
         updateCaptureUi(); showBanner("${captured.size} 件（「完了」で ${sourceName()} へ）",1200)
     }
     private fun finishCapture() {
         sysCapture?.let { finishSystemCapture(it); return }
-        if(captured.isEmpty()) { cancelCapture(); return }
+        val data=captureResult() ?: run { setResult(RESULT_CANCELED); finish(); return }
+        android.util.Log.i(app.thetahatch.adb.AdbBridge.TAG,"capture: return ${captured.size} to ${capture?.source}")
+        setResult(RESULT_OK,data); finish()
+    }
+    /** 撮ったもの全部を ClipData に入れた結果（1 つでも ClipData）。何も無ければ null */
+    private fun captureResult():Intent? {
+        if(captured.isEmpty()) return null
         val auth="$packageName.files"
         val uris=captured.map { androidx.core.content.FileProvider.getUriForFile(this,auth,it.first) }
         val clip=android.content.ClipData(android.content.ClipDescription("Theta Camera Hatch",captured.map { it.second }.distinct().toTypedArray()),android.content.ClipData.Item(uris[0]))
         uris.drop(1).forEach { clip.addItem(android.content.ClipData.Item(it)) }
-        val data=Intent().apply { setDataAndType(uris[0],captured[0].second); clipData=clip; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); putExtra("count",uris.size) }
-        android.util.Log.i(app.thetahatch.adb.AdbBridge.TAG,"capture: return ${uris.size} to ${capture?.source}")
-        setResult(RESULT_OK,data); finish()
+        return Intent().apply { setDataAndType(uris[0],captured[0].second); clipData=clip; addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); putExtra("count",uris.size) }
+    }
+    /** ホーム・最近のアプリ（スワイプで閉じる前）に出るとき：撮った分があれば返して閉じる。スキャナーなど自分で開いた画面へ移るときは呼ばれない */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        if(capture!=null && sysCapture==null && captured.isNotEmpty() && !isFinishing) finishCapture()
     }
     /**
      * Android 標準の「撮って返す」の返し方：
@@ -1498,8 +1507,14 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private fun cancelCapture() { captured.forEach { it.first.delete() }; captured.clear(); setResult(RESULT_CANCELED); finish() }
     private fun askCancelCapture() {
         if(captured.isEmpty()) { cancelCapture(); return }
-        android.app.AlertDialog.Builder(this).setTitle("${sourceName()} へ返しますか？").setMessage("撮った ${captured.size} 件があります。")
-            .setPositiveButton("返す") { _,_ -> finishCapture() }.setNegativeButton("捨ててやめる") { _,_ -> cancelCapture() }.setNeutralButton("続ける",null).show()
+        // 既定は「残す」（返す）。消すのは「捨てる」をはっきり選んだときだけ。ダイアログの外を押して閉じても返す
+        android.app.AlertDialog.Builder(this).setTitle("撮った ${captured.size} 件を ${sourceName()} へ返して終わります")
+            .setMessage("捨てる場合だけ「捨てる」を押してください。")
+            .setPositiveButton("返して終わる") { _,_ -> finishCapture() }
+            .setNeutralButton("続ける",null)
+            .setNegativeButton("捨てる") { _,_ -> android.app.AlertDialog.Builder(this).setMessage("撮った ${captured.size} 件を本当に捨てますか？")
+                .setPositiveButton("残して返す") { _,_ -> finishCapture() }.setNegativeButton("捨てる") { _,_ -> cancelCapture() }.show() }
+            .show()
     }
     /** スキャン：端の検出と補正は ML Kit。scanFormat に合わせて PDF（1 つ）か ページごとの JPEG で返す */
     private fun startCaptureScan() {
