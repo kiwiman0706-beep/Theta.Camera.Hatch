@@ -1,0 +1,290 @@
+[
+  {
+    "id": "G01",
+    "type": "official",
+    "title": "Open GoPro compatibility",
+    "url": "https://gopro.github.io/OpenGoPro/",
+    "note": "HERO8は対応一覧にない。後継機用USB/COHN仕様を流用しない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G02",
+    "type": "official",
+    "title": "GoPro Webcam support",
+    "url": "https://community.gopro.com/s/article/GoPro-Webcam?language=en_US",
+    "note": "HERO8 USB Webcam、GoPro Connect/MTP切替、PC向けユーティリティ、Webcam中の録画不可。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G03",
+    "type": "official",
+    "title": "GoPro USB/MTP transfer",
+    "url": "https://community.gopro.com/s/article/Camera-is-not-Recognized-when-Plugged-into-a-Computer-USB-Port?language=en_US",
+    "note": "HERO8のMTP設定とPC転送。Android実証ではない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G04",
+    "type": "unofficial-primary",
+    "title": "goprowifihack",
+    "url": "https://github.com/KonradIT/goprowifihack",
+    "note": "HERO8は通常HERO7資料、GoPro ConnectはHERO9資料を参照と作者が明記。2025年アーカイブ。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G05",
+    "type": "unofficial-primary",
+    "title": "HERO8 BLE investigation",
+    "url": "https://github.com/KonradIT/goprowifihack/blob/master/Bluetooth/bluetooth-api.md",
+    "note": "HERO8 Blackを使った作者の調査。SSID/パスワード取得・制御。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G06",
+    "type": "unofficial-primary",
+    "title": "HERO8 .NET API implementation",
+    "url": "https://github.com/asvol/gopro.net",
+    "note": "HERO8明示のHTTP撮影/ファイル取得実装。Android SDKではない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G07",
+    "type": "official",
+    "title": "GoPro Labs",
+    "url": "https://gopro.github.io/labs/",
+    "note": "HERO8用実験ファームウェアあり。標準SDKの代替でもOpen GoPro対応化でもない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "G08",
+    "type": "official",
+    "title": "HERO8 manual",
+    "url": "https://gopro.com/content/dam/help/hero8-black/manuals/HERO8Black_UM_ENG_REVC.pdf",
+    "note": "メーカー取扱説明書。リンクのみ。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I01",
+    "type": "official",
+    "title": "Insta360 developer portal",
+    "url": "https://www.insta360.com/developer/home",
+    "note": "Android SDK V2.2.6、2026-10-20、GO Ultraを対応機種に明記（調査時表示）。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I02",
+    "type": "official",
+    "title": "Insta360 SDK application",
+    "url": "https://www.insta360.com/sdk/apply",
+    "note": "SDK申請。今回申請は実行していない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I03",
+    "type": "official",
+    "title": "Insta360 developer docs",
+    "url": "https://github.com/Insta360Develop/Insta360-Developer_Docs",
+    "note": "現行公開ドキュメント。Android V2はX/ACE/GO共通。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I04",
+    "type": "official",
+    "title": "Android V2 integration",
+    "url": "https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/x-ace-go/android/camera-integration.md",
+    "note": "BLEからWi-Fi認証情報取得、USB/Wi-Fi接続、撮影・プレビュー・ファイル管理。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I05",
+    "type": "official",
+    "title": "Android V2 environment",
+    "url": "https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/x-ace-go/android/environment.md",
+    "note": "Maven認証、SDK依存、権限、ネットワーク経路、ビルド条件。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I06",
+    "type": "official",
+    "title": "GO Ultra livestream/webcam FAQ",
+    "url": "https://onlinemanual.insta360.com/goultra/en-us/faq/functionality/livestreaming",
+    "note": "製品機能としてライブ配信・Webcam非対応。SDKプレビューと混同しない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I07",
+    "type": "official",
+    "title": "GO Ultra file transfer",
+    "url": "https://onlinemanual.insta360.com/goultra/en-us/camera/appuse/filetransfer",
+    "note": "USB Drive ModeでPCからDCIM/Camera01へアクセス。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I08",
+    "type": "official",
+    "title": "GO Ultra specs",
+    "url": "https://www.insta360.com/us/specs/go-ultra",
+    "note": "JPG/DNG/MP4、H.264/H.265、撮影モード。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I09",
+    "type": "official",
+    "title": "Older SDK FAQ",
+    "url": "https://onlinemanual.insta360.com/developer/en-us/resource/sdk",
+    "note": "申請方式。対応一覧がX中心で新V2ページと差があるため古い一覧でGO Ultra非対応と決めない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "I10",
+    "type": "official",
+    "title": "Android V2 API reference",
+    "url": "https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/x-ace-go/android/camera-api.md",
+    "note": "getSupportCameraType、接続/撮影/プレビューAPI。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "W01",
+    "type": "official",
+    "title": "WG-5 GPS specs",
+    "url": "https://www.ricoh-imaging.co.jp/japan/products/wg-5_gps/spec/",
+    "note": "USB2.0、SD、Eye-Fi対応、外部映像端子。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "W02",
+    "type": "official",
+    "title": "WG-5 GPS manual",
+    "url": "https://www.ricoh-imaging.co.jp/japan/support/man-pdf/wg-5_gps.pdf",
+    "note": "USB接続にMSC/PTPの設定がある。リンクのみ。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "W03",
+    "type": "official",
+    "title": "WG-5 GPS FAQ",
+    "url": "https://www.ricoh-imaging.co.jp/japan/support/faq/wg-5_gps/",
+    "note": "I-USB7ケーブル、O-RC1リモコン。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "W04",
+    "type": "official",
+    "title": "WG-5 GPS product",
+    "url": "https://www.ricoh-imaging.co.jp/english/products/wg-5_gps/",
+    "note": "Eye-Fi連動機能。Wi-Fi内蔵カメラ向けAPIとは異なる。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D01",
+    "type": "official",
+    "title": "Pocket 2 FAQ",
+    "url": "https://www.dji.com/pocket-2/faq",
+    "note": "無線アクセサリー、PC/カード転送、RTMPライブ配信。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D02",
+    "type": "official",
+    "title": "Pocket 2 support",
+    "url": "https://www.dji.com/support/product/pocket-2",
+    "note": "初回アクティベーション、接続、転送。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D03",
+    "type": "official",
+    "title": "Osmo footage export guide",
+    "url": "https://support.dji.com/help/content?customId=en-us03400006849&lang=en&re=US&spaceId=34",
+    "note": "Pocket 2のスマホOTG直接転送はNot Supported。PC転送とMimoスマホアダプター接続は別。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D04",
+    "type": "official",
+    "title": "DJI MSDK V5",
+    "url": "https://developer.dji.com/mobile-sdk/",
+    "note": "Pocket 2の対応を確認できない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D05",
+    "type": "official",
+    "title": "DJI MSDK V4",
+    "url": "https://developer.dji.com/mobile-sdk-v4",
+    "note": "旧OsmoとPocket 2を混同しない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D06",
+    "type": "official",
+    "title": "DJI R-SDK demo",
+    "url": "https://github.com/dji-sdk/Osmo-GPS-Controller-Demo",
+    "note": "Osmo Action/360向けリモコン。Pocket 2対応や映像/ファイルAPIの根拠ではない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D07",
+    "type": "unofficial-primary",
+    "title": "Osmosis",
+    "url": "https://github.com/KonradIT/osmosis",
+    "note": "Android非公式ファイル転送/DUML資料。調査時Pocket 2は実機確認済み一覧にない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D08",
+    "type": "unofficial-primary",
+    "title": "Osmosis protocol",
+    "url": "https://github.com/KonradIT/osmosis/blob/main/MEDIA_PROTOCOL.md",
+    "note": "非公式の接続・ファイル転送資料。Pocket 2互換性は未確認。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "D09",
+    "type": "official",
+    "title": "Pocket 2 manual",
+    "url": "https://dl.djicdn.com/downloads/DJI_Pocket_2/20210312UM/DJI_Pocket_2_User_Manual_v1.2_EN.pdf",
+    "note": "取扱説明書リンク。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "A01",
+    "type": "official",
+    "title": "Android Wi-Fi request API",
+    "url": "https://developer.android.com/develop/connectivity/wifi/wifi-bootstrap",
+    "note": "登録済みAPへの接続要求と承認省略条件。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "A02",
+    "type": "official",
+    "title": "Android USB host",
+    "url": "https://developer.android.com/develop/connectivity/usb/host",
+    "note": "USB利用許可と通信。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "A03",
+    "type": "official",
+    "title": "Android MtpDevice",
+    "url": "https://developer.android.com/reference/android/mtp/MtpDevice",
+    "note": "MTP/PTPファイルアクセス。任意カメラ撮影ができるという意味ではない。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "A04",
+    "type": "official",
+    "title": "Android storage access framework",
+    "url": "https://developer.android.com/training/data-storage/shared/documents-files",
+    "note": "OSが公開する外部ストレージへユーザー選択後にアクセス。",
+    "checked_date": "2026-11-14"
+  },
+  {
+    "id": "A05",
+    "type": "official",
+    "title": "Android BLE permissions",
+    "url": "https://developer.android.com/develop/connectivity/bluetooth/bt-permissions",
+    "note": "BLEスキャン/接続の権限。",
+    "checked_date": "2026-11-14"
+  }
+]

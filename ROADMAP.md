@@ -609,5 +609,6 @@ ChatGPT との最初の会話で ChatGPT 側が出した案のうち、台帳に
   - Wi-Fi API v2.1（OSC 準拠、カメラが親機）：撮影・設定・一覧・ダウンロード、ライブビュー `camera.getLivePreview`（MotionJPEG、THETA S は写真モードのみ、ファームウェア 01.62 以降）。
   - USB（PTP/MTP）：取り込みは Android の MTP で可能。撮影（InitiateCapture）は USB API でファームウェア 01.42 以降とされる。USB でのライブビュー操作は確認できず。「ライブストリーミングモード」（UVC、前後の魚眼 2 つ、つなぎ合わせは自前、その間は撮影・保存できない）。
   - 利用者が作った引き継ぎ資料：`docs/external-cameras/theta-s-handoff/`（仕様と根拠・実機検証チェックリストなど。RICOH の API 仕様・theta-client・UVCAndroid の参考資料は元の ZIP「THETA_S_Android_Claude_Handoff_2026-11-13.zip」に同梱）。
-- ほかの機種（未調査）：GoPro は Open GoPro API（Wi-Fi・BLE）、DJI Osmo Pocket は公式 SDK の対応機種を要確認、Insta360 は SDK の申請制、WG-5 は Wi-Fi 機能が無い可能性（Flucard 等）を要確認。
+- 機種ごとの調査（2026-11-14、利用者の引き継ぎ資料）：`docs/external-cameras/multicamera-handoff/`。GoPro HERO8 Black・Insta360 GO Ultra・RICOH WG-5 GPS・DJI Pocket 2 の個別メモ、共通設計とワンタッチ接続、検証計画と未解決事項、機能の対応表（`capability_matrix.json`）、参照先の一覧。参考資料の本体は元の ZIP「MultiCamera_Android_Claude_Handoff_2026-11-14.zip」に同梱。下の行より、この資料を優先する。
+- ほかの機種（当初のメモ、未調査）：GoPro は Open GoPro API（Wi-Fi・BLE）、DJI Osmo Pocket は公式 SDK の対応機種を要確認、Insta360 は SDK の申請制、WG-5 は Wi-Fi 機能が無い可能性（Flucard 等）を要確認。
 - 進め方の案：カメラごとの差を吸収する「外部カメラの窓口」（つなぐ・ライブビュー・撮る・一覧・取り込む）を作り、THETA S（公開 API がいちばん揃っている）から始める。

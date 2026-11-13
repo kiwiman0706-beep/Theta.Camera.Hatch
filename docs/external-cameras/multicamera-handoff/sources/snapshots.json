@@ -1,0 +1,29 @@
+[
+  {
+    "repo": "KonradIT/goprowifihack",
+    "commit": "b09e25741dcf8444ea564983ce13589737df0f30",
+    "url": "https://github.com/KonradIT/goprowifihack",
+    "retrieved": "2026-11-14",
+    "scope": "selected text sources; no SDK binaries"
+  },
+  {
+    "repo": "Insta360Develop/Insta360-Developer_Docs",
+    "commit": "894bad7ae2a30703b7361de65902bfacaecb060b",
+    "url": "https://github.com/Insta360Develop/Insta360-Developer_Docs",
+    "retrieved": "2026-11-14",
+    "scope": "selected text sources; no SDK binaries"
+  },
+  {
+    "repo": "asvol/gopro.net",
+    "commit": "4da6d35d18038e48aa8419c876b8ff6316cd3ce7",
+    "url": "https://github.com/asvol/gopro.net",
+    "retrieved": "2026-11-14",
+    "scope": "selected text sources; no SDK binaries"
+  },
+  {
+    "repo": "KonradIT/osmosis",
+    "commit": "207c5ca61a7d9f00fa2b625cceec38c77f769d61",
+    "retrieved": "2026-11-14",
+    "scope": "README, protocol, roadmap, license only"
+  }
+]

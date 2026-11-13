@@ -1,0 +1,38 @@
+[
+  {
+    "model": "GoPro HERO8 Black",
+    "official_api": "Open GoPro対象外",
+    "wifi_control": "非公式gpControl/BLE資料あり",
+    "wifi_preview": "非公式UDP方式を検証",
+    "usb_import": "MTP公式案内あり; Android要検証",
+    "usb_preview": "PC Webcam公式; Android USB Ethernet方式は研究",
+    "priority": "非公式連携候補"
+  },
+  {
+    "model": "Insta360 GO Ultra",
+    "official_api": "Android SDK V2対応; 申請/取得条件あり",
+    "wifi_control": "SDK対応機種; 各機能実機検証",
+    "wifi_preview": "SDK previewを検証",
+    "usb_import": "USB Drive ModeまたはSDK経路を検証",
+    "usb_preview": "SDK USB previewは接続型別確認; UVC非対応",
+    "priority": "公式SDK連携の優先候補"
+  },
+  {
+    "model": "RICOH WG-5 GPS",
+    "official_api": "撮影/ライブ公開API未確認",
+    "wifi_control": "本体Wi-Fi API未確認; Eye-Fiと区別",
+    "wifi_preview": "根拠なし",
+    "usb_import": "MSC/PTPまたはSD; Android要検証",
+    "usb_preview": "根拠なし",
+    "priority": "取り込み専用"
+  },
+  {
+    "model": "DJI Pocket 2 (tentative)",
+    "official_api": "対象モデルの公開SDK未確認",
+    "wifi_control": "無線アクセサリー所有; Mimo可能/自作は未確認",
+    "wifi_preview": "Mimo可能/自作は未確認",
+    "usb_import": "スマホOTG公式非対応; SD readerを優先",
+    "usb_preview": "公開方式未確認",
+    "priority": "取り込み優先/非公式は研究"
+  }
+]

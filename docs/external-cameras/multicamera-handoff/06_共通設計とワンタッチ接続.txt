@@ -1,0 +1,38 @@
+既存Androidアプリへの統合設計（提案）
+
+UIはメーカー名/機種を表示し、利用可能な操作だけ出す。
+カメラごとの能力に canImport / canCapture / canPreview / canRecordWithPreview / needsPhysicalModeChange を持つ。
+能力は officialSupported / communityReported / verifiedOnThisDevice / unsupported / unknown の根拠も保存する。
+
+通信は分離
+ThetaWeb・ThetaMtp・ThetaUvc
+GoProLegacyBle・GoProLegacyHttp・GoProMtp・GoProUsbEthernetExperimental
+Insta360V2Sdk（WIFI/BLE/USBをSDK内で選択）
+GenericPtpImport・GenericStorageImport（MSC/SDカード/SAF）
+Pocket2Experimental（将来）
+
+ほぼ1タップの共通方針
+最初の登録/OS権限/カメラ本体の承認は省略せず、本人の機器情報を記憶する。
+登録済みカメラの「ライブ」または「取り込み」を押すと必要な接続処理を自動で進める。
+BLEでWi-Fi起動と認証情報取得が可能な機種は活用。単にWi-Fi一覧を開くショートカットにしない。
+WifiNetworkSpecifierで具体的APへ要求。承認済みの同一APへの再要求は確認省略が可能だが、OS/端末・ネットワーク忘却で再承認が必要。[A01]
+電源OFFからの復帰、USBモード切替、未対応アクセサリーは別の条件として案内。
+インターネットなしAPへの接続と、既存オンライン処理の経路を分離。SDKがprocess全体bindを要求する場合は特に注意。
+同時に複数カメラのAPを使う前提にせず、初版は1台ずつ接続する。
+
+映像形式
+THETA Wi-Fi MJPEG、GoPro UDP映像、Insta SDK previewをそれぞれの受信/デコード経路へ。
+画面表示APIだけ共通化。全機種をUVC/MJPEG/RTSPのどれか一つへ無理に揃えない。
+保存済み動画のpreviewとリアルタイムpreviewを型で区別する。
+
+取り込み
+機種シリアルまたは登録ID+フォルダ/名前+サイズ+日時を候補キーにして必要時ハッシュ照合。
+USB objectHandleやWi-Fi URLは永続IDとして信用しない。
+一時ファイルにコピー→長さ/完了確認→確定。容量不足/切断は未完了として残す。
+原本と派生ファイルを分ける。MP4のH.265、チャプター分割、LRV、DNG、付随メタデータも確認。
+カメラ原本削除/フォーマット/初期化/FW更新は今回の機能追加に自動で含めない。
+
+ライブラリ
+Insta SDKは取得/利用条件を確認して導入。公開ドキュメントとバイナリのライセンスは別。
+非公式資料は固定コミットと出典を残す。サンプルをコピーする前にLICENSEと推移依存を確認。
+SDK/Android版を上げる場合、既存アプリのABI、minSdk、16KBページサイズ、権限、ストレージ導線への影響を調べる。

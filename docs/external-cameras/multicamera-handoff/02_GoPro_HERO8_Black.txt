@@ -1,0 +1,52 @@
+GoPro HERO8 Black
+
+結論
+現行Open GoProの公式対象ではない。[G01]
+ただしHERO8を直接調べたBLE資料と、HERO8向けHTTP実装が公開されている。非公式連携としてなら有望。[G04-G06]
+
+Wi-Fi/BLE（非公式作者の調査）
+goprowifihackのREADMEは「HERO8の通常操作はHERO7、GoPro ConnectはHERO9の資料」と案内。
+Bluetooth/bluetooth-api.mdはHERO8 Blackを使って調査したと明記。
+初回ペアリング/必要なAndroid承認後、BLEでカメラを見つけ、Wi-Fiを有効化、SSID/パスワード取得→WifiNetworkSpecifierで参加する構成を検討。
+BLEのスリープ復帰条件は本体FW/経過時間に依存し得る。電源OFFでもいつでも起動できるとは約束しない。
+主なBLE参考UUID:
+Wi-Fi SSID: B5F90002-AA8D-11E3-9046-0002A5D5C51B
+Wi-Fi password: B5F90003-AA8D-11E3-9046-0002A5D5C51B
+Command request/response: B5F90072... / B5F90073...
+固定GATT handleを使わずサービス/UUIDを実機で発見する。通知の有効化と分割レスポンスの処理が必要。
+
+HTTP候補（非公式、HERO8実機照合が必要）
+カメラAPのIP候補10.5.5.9。
+GET /gp/gpControl : 機種/スキーマ情報
+GET /gp/gpControl/status : 状態
+GET /gp/gpControl/command/shutter?p=1 : 撮影開始/シャッター
+GET /gp/gpControl/command/shutter?p=0 : 動画/タイムラプス停止
+GET /gp/gpControl/command/mode?p=1 : 写真モード候補
+http://10.5.5.9:8080/gp/gpMediaList : ファイル一覧候補
+カメラの応答/スキーマと実FWを確認して設定IDを採用。HERO7 JSONに載る設定全部をHERO8に送らない。
+メディアのフォルダ名/ファイル名は一覧から取得。HTTPの80/8080の使い分けも同梱資料と本体で確認。
+
+Wi-Fiライブ（研究用）
+従来gpControl系は開始コマンドとUDP 8554受信を使用する資料がある。HTTPのMJPEGとして実装しない。
+HTTP開始、UDP受信先、keepalive、MPEG-TS/H.264等の実フォーマットをPoCで確認する。録画中の表示継続、モード/FWによる制約も確認。
+HERO8固有の「通常録画+プレビュー」の保証は本パックではしていない。
+
+USBファイル取り込み [G02,G03,A03]
+HERO8のUSB設定はMTPとGoPro Connectを区別する。画像転送にはMTPを選ぶという公式案内あり。
+Android USB host + MtpDeviceでファイル列挙/取得を検討。PC公式対応はAndroid互換性の保証ではない。
+MTPでの取得ができても標準MTP経由の撮影やライブができるとは限らない。
+
+USBライブ [G02,G04]
+公式PC WebcamユーティリティはHERO8対応。これはAndroidのUVC対応を意味しない。
+非公式GoPro-Connect.mdではUSB Ethernet越しのHTTP操作とUDP 8554映像として説明。
+候補: /gp/gpWebcam/START?res=720、/gp/gpWebcam/STOP。
+172.*.*.51と記載されるUSB側IPは実際のインターフェース/DHCPで発見し、架空の固定IPにしない。
+AndroidがUSBネットワーク機器を認識して経路を作れるかが最初の検証点。認識しない場合にTHETA用UVCライブラリを追加しても解決しない。
+公式Webcam FAQではWebcam中の本体録画とマイク音声の利用は非対応。非公式資料の「撮影コマンドが動く」という記述と同時利用保証を混同しない。
+
+資料の扱い
+goprowifihackは2025-03-02にアーカイブ。作者報告と現FWが一致するとは限らない。
+asvol/gopro.netはHERO8明示の実装参考で、Androidへそのまま組み込むものではない。
+GoPro Labsは任意の研究候補。USB給電起動等があるが、自動でFWを書き換えない。公式Open GoPro対応化と説明しない。[G07]
+
+実装順: MTP読み取り→BLE接続情報→Wi-Fi一覧/撮影→Wi-Fi映像→USB Ethernet映像。

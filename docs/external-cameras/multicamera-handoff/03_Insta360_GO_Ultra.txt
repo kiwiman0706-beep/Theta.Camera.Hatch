@@ -1,0 +1,53 @@
+Insta360 GO Ultra
+
+結論
+公式開発者ページはAndroid SDK V2.2.6（2026-10-20）にGO Ultra対応を明記。[I01]
+現行V2文書はX/ACE/GO共通。旧V1はX中心でAPI非互換のため、古いInstaCameraManagerのコードをそのまま採用しない。[I03]
+公開ドキュメントがあることとSDKバイナリを無申請で入手できることは別。申請とMavenアクセス条件がある。[I02,I05]
+
+期待できる連携
+Camera SDK: 接続、状態、撮影設定、静止画/動画制御、プレビュー、ファイル一覧/転送。
+Media SDK: 表示、書き出し等。必要な機能だけ採用する。
+GO Ultraが対応機種であることは確認済み。ただしUSB/Wi-Fi/BLEごとの対応機種一覧getSupportCameraType()と実機で機能を確かめる。[I10]
+
+接続を簡単にする案 [I04,A01]
+1. 初回BLEスキャンで本人のGO Ultraを選択し権限/ペアリングを承認。
+2. bleDevice.system.getWifiData()でSSID/pwd取得。
+3. AndroidのWifiNetworkSpecifierで具体的APに接続。
+4. SDKへ選択ネットワークを引き継ぎ、Wi-Fi CameraDeviceへ移行。
+5. 次回は保存済み本体を選んでこの処理をまとめる。
+BLEのみではプレビューは流れない。
+公式ガイドはbindProcessToNetworkとnetworkHandleを使う例を載せる。既存アプリのクラウド/HTTP通信へ影響するので、別プロセス分離やSDKのネットワーク指定が十分かを検討。終了時は必ず解除する。
+BLE wake APIは存在するが例はX4。GO Ultraの電源/Action Pod状態別に動作確認してから電源ON省略を案内する。
+
+V2 APIの入口（同梱資料の正確な型/引数を参照）
+InstaCameraSDK.init
+CameraDevice.get(ConnectType.WIFI / USB / BLE)
+device.connect(...), disconnect(), release()
+device.getSupportCameraType()
+device.capture.loadJson() → getSupportParam()/getSupported()で設定範囲を読む
+device.capture.startCapture()/stopCapture()
+CaptureStatusListenerで保存完了と生成ファイルを取得
+Live Preview/File Management章に従う。RTMP配信用live APIとpreview APIを取り違えない。
+接続成功だけで全機能を有効化せず、本体機種/SDK/FWと対応値を保存する。
+
+USB
+SDKはConnectType.USBを公開。文書はUSB経由サービスを127.0.0.1へトンネルする方式を説明している。[I05]
+GO UltraでUSB制御/プレビュー/転送が全部通るか、Action Pod装着・カメラ側USBモード・SDK whitelist・接続型別対応表を実機確認する。
+一般ファイル取り込みは公式のUSB Drive Modeが別にある。PCでDCIM/Camera01をコピーできる。[I07]
+Androidでドライブ認識→SAFで選択する方法も候補。SDKモードとUSB Drive Modeを同時利用できると仮定しない。
+
+ライブに関する重要な境界 [I06,I10]
+GO Ultra製品FAQはライブ配信とWebcamを非対応と明記。
+これはSDKの構図確認プレビューと別概念。現行SDKがGO Ultraをサポートしているためプレビューを検証する価値は高い。
+USBを挿せばUVCカメラになる、と実装しない。GO 3/3SのWebcam案内がgoultra配下にも出るが、適用機種はGO 3/3SでありUltraではない。
+SDKのRTMP liveは二眼パノラマ用の制限記載がある。単眼GO UltraでRTMP配信が使えるという根拠にしない。
+
+原本と書き出し [I08]
+JPG/DNG/MP4、H.264/H.265。FreeFrame等の原本をコピーすることと、アプリの手ブレ補正/画角調整済み動画を生成することは異なる。
+付随データや低解像度ファイルの必要性を確認し、元ファイルを削除しない。
+
+文書の版差
+開発者ポータルの版とGitHub changelogの記載版が一致しない場合がある。採用する実SDK版のAPI文書/依存/POMを優先して照合する。
+公開environment.mdはminSdk28、compile/target36の例だが、旧SDK FAQはAndroid10+と説明。既存minSdkを変更する前に採用版AARで確認する。
+Maven認証情報はメーカーから取得し、local.properties/環境変数等へ分離。秘密を配布ZIP・Gitに入れない。

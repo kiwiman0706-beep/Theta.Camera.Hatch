@@ -1,0 +1,146 @@
+調査日 2026-11-14 (Asia/Tokyo)
+公式と非公式作者自身の資料を区別。
+
+[G01] official: Open GoPro compatibility
+https://gopro.github.io/OpenGoPro/
+HERO8は対応一覧にない。後継機用USB/COHN仕様を流用しない。
+
+[G02] official: GoPro Webcam support
+https://community.gopro.com/s/article/GoPro-Webcam?language=en_US
+HERO8 USB Webcam、GoPro Connect/MTP切替、PC向けユーティリティ、Webcam中の録画不可。
+
+[G03] official: GoPro USB/MTP transfer
+https://community.gopro.com/s/article/Camera-is-not-Recognized-when-Plugged-into-a-Computer-USB-Port?language=en_US
+HERO8のMTP設定とPC転送。Android実証ではない。
+
+[G04] unofficial-primary: goprowifihack
+https://github.com/KonradIT/goprowifihack
+HERO8は通常HERO7資料、GoPro ConnectはHERO9資料を参照と作者が明記。2025年アーカイブ。
+
+[G05] unofficial-primary: HERO8 BLE investigation
+https://github.com/KonradIT/goprowifihack/blob/master/Bluetooth/bluetooth-api.md
+HERO8 Blackを使った作者の調査。SSID/パスワード取得・制御。
+
+[G06] unofficial-primary: HERO8 .NET API implementation
+https://github.com/asvol/gopro.net
+HERO8明示のHTTP撮影/ファイル取得実装。Android SDKではない。
+
+[G07] official: GoPro Labs
+https://gopro.github.io/labs/
+HERO8用実験ファームウェアあり。標準SDKの代替でもOpen GoPro対応化でもない。
+
+[G08] official: HERO8 manual
+https://gopro.com/content/dam/help/hero8-black/manuals/HERO8Black_UM_ENG_REVC.pdf
+メーカー取扱説明書。リンクのみ。
+
+[I01] official: Insta360 developer portal
+https://www.insta360.com/developer/home
+Android SDK V2.2.6、2026-10-20、GO Ultraを対応機種に明記（調査時表示）。
+
+[I02] official: Insta360 SDK application
+https://www.insta360.com/sdk/apply
+SDK申請。今回申請は実行していない。
+
+[I03] official: Insta360 developer docs
+https://github.com/Insta360Develop/Insta360-Developer_Docs
+現行公開ドキュメント。Android V2はX/ACE/GO共通。
+
+[I04] official: Android V2 integration
+https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/x-ace-go/android/camera-integration.md
+BLEからWi-Fi認証情報取得、USB/Wi-Fi接続、撮影・プレビュー・ファイル管理。
+
+[I05] official: Android V2 environment
+https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/x-ace-go/android/environment.md
+Maven認証、SDK依存、権限、ネットワーク経路、ビルド条件。
+
+[I06] official: GO Ultra livestream/webcam FAQ
+https://onlinemanual.insta360.com/goultra/en-us/faq/functionality/livestreaming
+製品機能としてライブ配信・Webcam非対応。SDKプレビューと混同しない。
+
+[I07] official: GO Ultra file transfer
+https://onlinemanual.insta360.com/goultra/en-us/camera/appuse/filetransfer
+USB Drive ModeでPCからDCIM/Camera01へアクセス。
+
+[I08] official: GO Ultra specs
+https://www.insta360.com/us/specs/go-ultra
+JPG/DNG/MP4、H.264/H.265、撮影モード。
+
+[I09] official: Older SDK FAQ
+https://onlinemanual.insta360.com/developer/en-us/resource/sdk
+申請方式。対応一覧がX中心で新V2ページと差があるため古い一覧でGO Ultra非対応と決めない。
+
+[I10] official: Android V2 API reference
+https://github.com/Insta360Develop/Insta360-Developer_Docs/blob/main/docs/en/sdk/x-ace-go/android/camera-api.md
+getSupportCameraType、接続/撮影/プレビューAPI。
+
+[W01] official: WG-5 GPS specs
+https://www.ricoh-imaging.co.jp/japan/products/wg-5_gps/spec/
+USB2.0、SD、Eye-Fi対応、外部映像端子。
+
+[W02] official: WG-5 GPS manual
+https://www.ricoh-imaging.co.jp/japan/support/man-pdf/wg-5_gps.pdf
+USB接続にMSC/PTPの設定がある。リンクのみ。
+
+[W03] official: WG-5 GPS FAQ
+https://www.ricoh-imaging.co.jp/japan/support/faq/wg-5_gps/
+I-USB7ケーブル、O-RC1リモコン。
+
+[W04] official: WG-5 GPS product
+https://www.ricoh-imaging.co.jp/english/products/wg-5_gps/
+Eye-Fi連動機能。Wi-Fi内蔵カメラ向けAPIとは異なる。
+
+[D01] official: Pocket 2 FAQ
+https://www.dji.com/pocket-2/faq
+無線アクセサリー、PC/カード転送、RTMPライブ配信。
+
+[D02] official: Pocket 2 support
+https://www.dji.com/support/product/pocket-2
+初回アクティベーション、接続、転送。
+
+[D03] official: Osmo footage export guide
+https://support.dji.com/help/content?customId=en-us03400006849&lang=en&re=US&spaceId=34
+Pocket 2のスマホOTG直接転送はNot Supported。PC転送とMimoスマホアダプター接続は別。
+
+[D04] official: DJI MSDK V5
+https://developer.dji.com/mobile-sdk/
+Pocket 2の対応を確認できない。
+
+[D05] official: DJI MSDK V4
+https://developer.dji.com/mobile-sdk-v4
+旧OsmoとPocket 2を混同しない。
+
+[D06] official: DJI R-SDK demo
+https://github.com/dji-sdk/Osmo-GPS-Controller-Demo
+Osmo Action/360向けリモコン。Pocket 2対応や映像/ファイルAPIの根拠ではない。
+
+[D07] unofficial-primary: Osmosis
+https://github.com/KonradIT/osmosis
+Android非公式ファイル転送/DUML資料。調査時Pocket 2は実機確認済み一覧にない。
+
+[D08] unofficial-primary: Osmosis protocol
+https://github.com/KonradIT/osmosis/blob/main/MEDIA_PROTOCOL.md
+非公式の接続・ファイル転送資料。Pocket 2互換性は未確認。
+
+[D09] official: Pocket 2 manual
+https://dl.djicdn.com/downloads/DJI_Pocket_2/20210312UM/DJI_Pocket_2_User_Manual_v1.2_EN.pdf
+取扱説明書リンク。
+
+[A01] official: Android Wi-Fi request API
+https://developer.android.com/develop/connectivity/wifi/wifi-bootstrap
+登録済みAPへの接続要求と承認省略条件。
+
+[A02] official: Android USB host
+https://developer.android.com/develop/connectivity/usb/host
+USB利用許可と通信。
+
+[A03] official: Android MtpDevice
+https://developer.android.com/reference/android/mtp/MtpDevice
+MTP/PTPファイルアクセス。任意カメラ撮影ができるという意味ではない。
+
+[A04] official: Android storage access framework
+https://developer.android.com/training/data-storage/shared/documents-files
+OSが公開する外部ストレージへユーザー選択後にアクセス。
+
+[A05] official: Android BLE permissions
+https://developer.android.com/develop/connectivity/bluetooth/bt-permissions
+BLEスキャン/接続の権限。
