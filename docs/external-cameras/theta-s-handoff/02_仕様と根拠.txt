@@ -1,0 +1,40 @@
+仕様一覧と確認レベル
+
+[確認済み: R01]
+USB制御: THETA S firmware 1.42以降、MTP 1.1ベースの拡張。
+Web API v2.1: THETA S firmware 1.62以降、Wi-Fi上のHTTP/JSON。直結時192.168.1.1:80。
+Sは接続時v2.0のためcamera.startSession→camera.setOptions(clientVersion=2)でv2.1へ移る。
+Wi-Fiライブ: camera.getLivePreview、Motion JPEG multipart/x-mixed-replace、640x320/10fps、Sは静止画モードのみ。撮影・操作・モード変更でストリームが終了する。
+通常静止画JPEG: 5376x2688または2048x1024。転送時は原本とメタデータを保持。
+Bluetooth APIはV以降。THETA本体プラグイン機能をSへ適用しない。
+
+対応APIの参照パス（references/theta-api-specs/ 起点）
+theta-usb-api/README.md
+theta-usb-api/operation/get_device_info.md
+theta-usb-api/operation/initiate_capture.md
+theta-usb-api/operation/get_object.md
+theta-usb-api/operation/get_partial_object.md
+theta-usb-api/property/functional_mode.md
+theta-usb-api/property/passphrase.md
+theta-web-api-v2.1/overview.md
+theta-web-api-v2.1/getting_started.md
+theta-web-api-v2.1/commands/camera.get_live_preview.md
+theta-web-api-v2.1/options/preview_format.md
+
+[確認済み: R01, R02]
+GetDeviceInfoでModel、Device Version、Serial Number、対応操作/イベント/プロパティを取得できる。
+SSID例: THETAXS00001017.OSC。初期パスワードはシリアル末尾の数字8桁。この例を固定値として実装しない。
+USB 0xD806 PassphraseはSでGET/SET対応。新しいX/Z1ではNULLを返す注記があるが、Sにその制限は記載されていない。
+提案: USBから現在値をGETして登録。失敗時だけ手入力または未変更の場合の初期パスワードを使う。SETやパスワードリセットは自動実行しない。
+FunctionalMode 0x5002はGETのみ。0x0000はUSB撮影可、0x8001はUSB撮影不可。これをSETしてUVC切替できると解釈しない。
+
+[確認済み: R03, R04]
+USBライブはUVC 1.1、Motion JPEG、1280x720、15fps。カメラ内スティッチなし。
+撮影モードボタンと電源ボタンを同時に押してライブストリーミング起動。
+公式マニュアルはライブモード中のスマホアプリによる撮影・保存画像閲覧/転送/削除が不可と明記。
+これは全USBコマンドの禁止を実証した意味ではないが、併用不可を初期設計の前提とする。
+
+[未検証]
+特定AndroidでのUSB認識、給電、MTP撮影、Wi-Fi再接続ダイアログ回数、USBからのパスワード読出し。
+通常モードでのUSB接続中Wi-Fi利用、同時コマンドの競合、UVC↔MTPの切替方法・再列挙、UVCライブラリ互換性。
+USB/Wi-Fi実効転送速度、切断後の再開、長時間ライブ安定性。

@@ -1,0 +1,34 @@
+既存アプリへ組み込む構成案（言語・フレームワークは既存優先）
+
+CameraRegistry: 本体識別、SSID/BSSID、暗号化した認証情報、確認済み能力。
+ConnectionCoordinator: ユーザーの意図、接続要求、権限、キャンセル、経路選択、切替待ちを管理。
+ThetaWebTransport: 特定Android Networkに紐づくHTTP/JSONとMJPEG。
+ThetaUsbMtpTransport: USBセッションと撮影/ファイル取得。USB interface所有者を一元化。
+PreviewSource: WifiMjpegPreviewと将来UsbUvcPreviewを分離。
+MediaRepository: カメラ側ファイルと保存済みファイルの同定、転送ジョブ、進捗、検証済み保存。
+Renderer: equirectangular/dual-fisheyeを明示して表示。
+
+能力モデル
+supportsFileRead、supportsStillCapture、supportsPreview、previewProjection、canCaptureWhilePreviewing、requiresPhysicalModeChange。
+Wi-Fi/USBというラベルだけで能力を決めない。機種・ファームウェア・現在モード・実証結果を反映。
+
+状態例
+Disconnected→PermissionRequired→Connecting→Identifying→Ready
+Ready→Previewing / Capturing / Importing
+Importing→SwitchPending→Ready→Previewing
+任意状態→Disconnected/Error。UVCはRequiresLiveMode→ConnectingUvc→PreviewingUvc。
+状態遷移時は古い接続コールバック/ジョブからの遅延通知を世代IDで無効化。
+
+実装順
+1. 既存プロジェクト調査と接続診断画面。実機の機種/OS/FWを記録。
+2. Wi-Fi登録・再接続・THETA本人確認・終了処理。
+3. Wi-Fiライブ→静止画撮影→画像取得→ライブ再開。
+4. USB一覧・サムネイル・原本コピー。メモリ使用量と転送速度を測定。
+5. USB撮影とPassphrase読出しによる登録省力化。
+6. 二つの経路を同一カメラ/同一メディアとして統合し、重複/切断復旧を確認。
+7. 将来UVC PoC。通常機能のリリース条件から分離する。
+
+完了の考え方
+通常操作が設定画面へ毎回遷移しないこと。OS承認が必要な場合はアプリ内の説明から自然に進むこと。
+USB/Wi-Fiの速度差は計測結果として提示。1タップは操作数であり即時接続/ゼロ待ち時間の保証ではない。
+同時利用不可なら逐次切替で提供し、本体ボタン/抜き差しが必要な条件を隠さない。

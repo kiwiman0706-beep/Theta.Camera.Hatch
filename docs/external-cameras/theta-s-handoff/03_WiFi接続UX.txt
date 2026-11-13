@@ -1,0 +1,33 @@
+Wi-Fi接続をほぼワンタッチにする設計
+
+基本導線（提案）
+初回: USB接続→USB使用を許可→機種/シリアル/現在のPassphrase取得→「このTHETAを登録」→必要なAndroid権限とWi-Fi接続を承認。
+USB未接続でもシリアルとパスワードによる登録を可能にする。保存するカメラ情報は別個体と混同しない。
+2回目以降: 「ライブビュー」→登録済みAPへ接続要求→HTTP到達確認→APIバージョン初期化→静止画モード確認→配信表示。
+本体の電源と無線がON、スマホWi-Fiが使用可能であることが前提。Wi-Fi OFF時はOSのWi-Fiパネルへ必要時のみ案内する。
+
+Android実装方針 [A01-A05, A10]
+Android 10/API29以降のWifiNetworkSpecifier + ConnectivityManager.requestNetworkを用いる。
+SSIDを正確に指定し、取得可能・有効ならBSSIDも保持して具体的APを特定。SSIDの前方一致検索を毎回使わない。
+初回のOS承認は必須。承認済みAPへ同一アプリが具体的に要求すると承認省略が可能。ネットワーク忘却・アプリ再登録・OS/端末差は別途検証。
+local-only NetworkRequestとしてNET_CAPABILITY_INTERNETを要求しない。THETAのAPにインターネット疎通を求めない。
+onAvailableのNetworkをカメラHTTPクライアントに適用する（Network.socketFactoryまたはopenConnection等）。SDK採用時も指定ネットワークを通るか検証する。
+アプリ全体をTHETAへbindProcessToNetworkする方式は既存のオンライン通信へ影響するため、カメラ専用接続を優先する。
+onLost/onUnavailable/拒否/タイムアウトを区別。onAvailable後もDHCP完了とHTTP到達、THETA S本人確認を行い、そこで初めて「接続済み」にする。
+画面終了・キャンセル時にストリームを閉じ、不要なNetworkCallbackを解除。接続要求を多重登録しない。
+通常Wi-Fiへの復帰はOSに委ねる。特定SSIDへ即時復帰できると保証しない。
+Android 12/API31以降でisStaConcurrencyForLocalOnlyConnectionsSupportedを確認。対応機種では通常Wi-Fiを維持できる場合がある。全機種に二重接続を保証しない。
+Android 9以前への対応は既存minSdkと相談。主経路はAPI29+とし、旧版のために非公開APIを使わない。
+
+権限 [A04,A05,A09]
+基本候補: INTERNET、ACCESS_NETWORK_STATE、ACCESS_WIFI_STATE、CHANGE_WIFI_STATE。実際に使用するAPIの要件で決める。
+Android 13+ではNEARBY_WIFI_DEVICESと適切なランタイム要求を検討。位置推定しない場合のみneverForLocation。
+旧OSではACCESS_FINE_LOCATION等の条件を確認。getScanResults/startScanは新OSでも位置情報権限が必要になるため、全域スキャンなしの登録済みAP接続を優先する。
+現行Android文書はtarget37+でACCESS_LOCAL_NETWORKを案内。実装時のSDK/OSに合わせて最新の要件を確認し、権限不足を接続タイムアウトと取り違えない。
+既存アプリが位置情報を使っている場合、機械的にmaxSdkVersion=32を追加しない。
+THETAのHTTPは平文。既存アプリのネットワークセキュリティ設定を確認し、カメラ接続に必要な範囲を明示する。[A11]
+
+表示例（提案）
+「THETAに接続中…」→「カメラを確認中…」→ライブ画面。
+失敗時は「カメラの電源と無線ランプを確認してください」「Wi-Fiへの接続が許可されていません」「パスワードを確認してください」を原因別に表示。
+本体側の原因をスマホ設定画面へ押し付けない。画面内に「再試行」と必要時のみ「設定を開く」を置く。

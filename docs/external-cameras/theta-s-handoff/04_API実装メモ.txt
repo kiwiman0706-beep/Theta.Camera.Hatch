@@ -1,0 +1,35 @@
+実装者向けプロトコルメモ
+
+Wi-Fi Web API [R01,R05]
+GET http://192.168.1.1/osc/info で機種とバージョンを確認。
+S再接続時はv2.0セッションを開始し、返却sessionIdを使ってclientVersion=2に変更。固定のsessionIdを使わない。
+POST /osc/commands/executeでcamera.getLivePreview。通常のJSONレスポンスとして読むのではなくmultipart/x-mixed-replaceの逐次JPEGを処理する。
+境界文字列はContent-Typeから取得。ネットワークreadとJPEG1枚は一致しない。ヘッダ/本体の分割、複数フレーム同時到着、上限サイズ、EOF、キャンセルを扱う。
+フレームが滞留したら古いフレームを破棄して最新を表示。無制限キューを作らない。
+撮影要求ではプレビューを閉じ、camera.takePicture→非同期完了確認→保存URL取得→必要ならGETで原本取得→プレビュー再開。
+THETA Sの完了確認は公式getting_started.mdのstateFingerprintと_latestFileUrl確認を参照。対応するcommand statusも仕様で確認。要求時の状態と比較し、既存の最後の写真を新規撮影結果と誤認しない。
+camera.listFilesで一覧取得・ページングし、返却URLから原本/サムネイルを取得。
+Web API SDK theta-clientは候補。既存HTTP基盤への統合、S初期化、ネットワーク指定、ライセンス、依存サイズを比較して採否を決める。
+
+USB MTP [R01,A06,A07]
+USB host対応を確認し、権限取得後に実際のinterface/endpointを検出する。VID/PIDを推測で固定しない。
+標準MtpDeviceは一覧・取得に便利。ただし撮影や独自プロパティを自由に送る汎用メソッドは公開APIにないため、USBレベルのMTP実装/適切な既存ライブラリが必要。
+MtpDeviceと独自MTP実装が同じinterface/セッションを同時占有しないよう所有者を1つにする。
+基本順序: GetDeviceInfo→OpenSession→GetStorageIDs→GetObjectHandles→GetObjectInfo→GetObjectまたはGetPartialObject→CloseSession。
+撮影: Supported操作/FunctionalMode確認→単写設定確認→InitiateCapture(0,0)→イベントと状態/一覧差分で保存完了確認→取得。
+0x1001 GetDeviceInfo / 0x1002 OpenSession / 0x1003 CloseSession
+0x1004 GetStorageIDs / 0x1007 GetObjectHandles / 0x1008 GetObjectInfo
+0x1009 GetObject / 0x100A GetThumb / 0x100E InitiateCapture
+0x1014 GetDevicePropDesc / 0x1015 GetDevicePropValue / 0x1016 SetDevicePropValue
+0x101B GetPartialObject / 0xD806 Passphrase（プロパティコード）
+InitiateCaptureの引数StorageID/ObjectFormatCodeはRICOH仕様で両方0指定。DeviceBusy時は状態を調べる。
+MTPのバイナリコンテナ長、transaction ID、コマンド/データ/応答フェーズ、型付き配列、UTF-16文字列はMTP/PTP仕様通りに扱う。USB readの単位とコンテナ境界が一致するとは限らない。
+USB切断時はワーカー/イベント待ち/endpointを解放。再接続後に以前のObjectHandleが同じファイルを指すと仮定しない。
+
+取り込みと保存（提案）
+ファイルをストリームで一時保存し、期待サイズ・読出し完了を確認してから確定。動画や大量写真を一括RAM読み込みしない。
+必要に応じハッシュを計算し、撮影情報と原本メタデータを保持。出力先は既存アプリのMediaStore/SAF/アプリ領域方針に従う。
+重複キーは本体シリアル+ファイルパス/名前+サイズ+撮影日時を候補にし、衝突時は内容ハッシュで確認。Wi-Fi URLとUSB handleを直接同一ID扱いしない。
+GetPartialObjectによる再開は同一ファイルの再同定後に行う。HTTP Range対応は未確認なので自動で前提にしない。
+転送途中にライブボタンが押されたら現在のファイル完了/安全な停止後に切り替える。転送経路を途中で無条件に差し替えない。
+撮影コマンドのタイムアウトは「結果不明」として照会。通信再試行による二重撮影を避ける。

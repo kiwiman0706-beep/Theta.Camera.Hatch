@@ -596,3 +596,18 @@ ChatGPT との最初の会話で ChatGPT 側が出した案のうち、台帳に
 - スワイプでズーム・明るさ、長押し操作（現状はピンチでズーム、明るさはスライダー）
 - イベントへの後から追加を「今日の写真」「この時間帯」で選ぶ（現状は期間内のイベント無しの記録をまとめて追加）
 - 持ち替え時にシャッター以外をロックして誤タッチを防ぐ（CAM-025）
+
+
+## CAM-038 外部カメラを「自分のカメラの一つ」として使う（2026-11-13 追加・後の方で）
+
+利用者の新しい目標。今は実装しない（ロードマップに置くだけ）。
+
+- 手持ちのカメラ：RICOH THETA S、GoPro、Insta360 GO Ultra、RICOH WG-5、DJI Osmo Pocket。
+- Wi-Fi か USB でつなぎ、撮影画面のレンズ切替（0.6・1・3・前後）と同じ感覚で外部カメラに切り替えて、ライブビューを見ながら撮る。
+- 撮ったデータの取り込み。取り込み・仕分けは Theta.Photo.Hatch に任せたほうがよいかもしれない（担当の分け方は未定）。
+- THETA S の調査メモ（2026-11-13、このスレッドで調べた結果）：
+  - Wi-Fi API v2.1（OSC 準拠、カメラが親機）：撮影・設定・一覧・ダウンロード、ライブビュー `camera.getLivePreview`（MotionJPEG、THETA S は写真モードのみ、ファームウェア 01.62 以降）。
+  - USB（PTP/MTP）：取り込みは Android の MTP で可能。撮影（InitiateCapture）は USB API でファームウェア 01.42 以降とされる。USB でのライブビュー操作は確認できず。「ライブストリーミングモード」（UVC、前後の魚眼 2 つ、つなぎ合わせは自前、その間は撮影・保存できない）。
+  - 利用者が作った引き継ぎ資料：`docs/external-cameras/theta-s-handoff/`（仕様と根拠・実機検証チェックリストなど。RICOH の API 仕様・theta-client・UVCAndroid の参考資料は元の ZIP「THETA_S_Android_Claude_Handoff_2026-11-13.zip」に同梱）。
+- ほかの機種（未調査）：GoPro は Open GoPro API（Wi-Fi・BLE）、DJI Osmo Pocket は公式 SDK の対応機種を要確認、Insta360 は SDK の申請制、WG-5 は Wi-Fi 機能が無い可能性（Flucard 等）を要確認。
+- 進め方の案：カメラごとの差を吸収する「外部カメラの窓口」（つなぐ・ライブビュー・撮る・一覧・取り込む）を作り、THETA S（公開 API がいちばん揃っている）から始める。
