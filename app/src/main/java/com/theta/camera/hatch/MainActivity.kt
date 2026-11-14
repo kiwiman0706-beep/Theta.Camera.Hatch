@@ -219,8 +219,9 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         val res = com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult.fromActivityResultIntent(r.data) ?: return@registerForActivityResult
         lifecycleScope.launch {
             val n = withContext(Dispatchers.IO) { runCatching { saveScan(res) } }
-            n.onSuccess { message("スキャンを保存しました（${it}ページ・PDF）") }.onFailure { message("スキャンを保存できません：${it.message}") }
+            n.onSuccess { message("スキャンを保存しました（${it.pages.size}ページ・PDF）。文字を読んでいます…") }.onFailure { message("スキャンを保存できません：${it.message}") }
             updateThumb()
+            n.getOrNull()?.let { titleScan(it, (res.pages ?: emptyList()).map { p -> p.imageUri }) }
         }
     }
 
@@ -966,6 +967,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             "画面の向き：${if(lockPortrait) "縦に固定（アイコンだけ回る）" else "端末に合わせて回る"}" to { lockPortrait=!lockPortrait; prefs.edit().putBoolean("lockPortrait",lockPortrait).apply(); flexLandscape=false; applyOrientationLock(); rotateUi() },
             "カメラを再接続" to { startProvider() },
             "純正カメラを開く" to { try {startActivity(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA))} catch(e:Exception){message("純正カメラを起動できません")} },
+            "Gemini（スキャンに自動でタイトル）：${if(ScanAi.key(this)!=null) "キーあり" else "キーなし"}" to { showGeminiKey() },
+            "純正カメラの置き換えガイド" to { showReplaceGuide() },
             "端末診断" to { showDiagnostics() },
             "使い方・制限" to { android.app.AlertDialog.Builder(this).setTitle("Theta Camera Hatch ${BuildConfig.VERSION_NAME}").setMessage("写真・動画・スキャン（書類）の3つのボタンで撮影。QR・バーコードは映すだけで画面の下に出るので、押すと開けます。動画中も写真を撮れます（端末が同時接続に対応している場合）。\n\n「操作を表示」でフラッシュ・タイマー・明るさ・水平・グリッド・写真モード・動画画質・レンズを出せます。\n\n開いたら自撮り：閉じた状態でこのアプリを開き、ほぼ全開にすると外画面への切替を要求します。OSの確認が出たら承認してください。録画・保存中は自動切替を保留します。\n\n写真と動画はDCIM/ThetaCamera、スキャンはDCIM/ThetaCamera/ScanとDocuments/ThetaCameraに保存。ピンチでズーム、タップでピント、音量キーで写真。\n\n50MP・HDR・望遠などはOSの公開範囲に依存します。Fold5実機での検証が必要です。").setPositiveButton("OK",null).show() },
             "アップデート（版 ${BuildConfig.VERSION_NAME}）" to { showUpdateMenu() }))
@@ -982,19 +985,71 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             .addOnFailureListener { message("スキャナーを起動できません（Google Play 開発者サービスが必要）：${it.message}") }
     }
     /** スキャン結果を DCIM/ThetaCamera/Scan（JPEG）と Documents/ThetaCamera（PDF）へ保存。ページ数を返す */
-    private fun saveScan(res:com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult):Int {
+    private class ScanSaved(val base:String, val pages:List<Uri>, val pdf:Uri?)
+    /**
+     * スキャンの AI-OCR：端末内で本文を読み、Gemini のキーがあれば自動でタイトル・種類・タグ・要約を付ける。
+     * ファイル名を「Scan_日付_タイトル」に変え、本文・タイトル・タグはサイドカー（.theta.json・.xmp）に入れて「探す」で見つかるようにする。
+     */
+    private fun titleScan(saved:ScanSaved, sources:List<Uri>) {
+        val folder="Scan"; val event=currentEvent
+        lifecycleScope.launch {
+            val info=withContext(Dispatchers.IO) { runCatching { ScanAi.analyze(this@MainActivity,sources) }.getOrNull() } ?: return@launch
+            withContext(Dispatchers.IO) { runCatching {
+                val safe=info.title.replace(Regex("[\\\\/:*?\"<>|\\s]+"),"_").trim('_').take(30)
+                val day=info.date.replace("-","").ifBlank { saved.base.removePrefix("Scan_").take(8) }
+                val nb=if(safe.isBlank()) saved.base else "Scan_${day}_$safe"
+                fun rename(u:Uri,name:String) { runCatching { contentResolver.update(u,ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,name) },null,null) } }
+                saved.pdf?.let { rename(it,"$nb.pdf") }
+                saved.pages.forEachIndexed { i,u -> val nm="${nb}_p${i+1}.jpg"; rename(u,nm)
+                    meta.create(u,nm,folder,event).also { m -> m.title=info.title; m.ocr=info.text; m.kind=info.kind; m.docDate=info.date
+                        m.tags.addAll(info.tags); if(info.summary.isNotBlank()) m.comment=info.summary; meta.changed(m) } }
+            } }
+            val label=info.title.ifBlank { "タイトルなし" }
+            showBanner(if(info.byGemini) "スキャン：『$label』（${info.kind.ifBlank { "書類" }}）" else if(ScanAi.key(this@MainActivity)==null) "スキャン：『$label』（端末内で読み取り。Gemini を設定すると詳しく付けます）" else "スキャン：『$label』（端末内で読み取り）",3500)
+            updateThumb()
+        }
+    }
+    private fun showGeminiKey() {
+        val has=ScanAi.key(this)!=null
+        val items=mutableListOf<Pair<String,()->Unit>>(
+            "Home・KidsHome Hatch のキーを借りる" to { lifecycleScope.launch {
+                val k=withContext(Dispatchers.IO) { ScanAi.keyFromHub(this@MainActivity) }
+                if(k==null) message("ハブ（Home・KidsHome）にキーが無いか、借りられませんでした") else { ScanAi.setKey(this@MainActivity,k); message("ハブのキーを使います（この端末の中に暗号化して保存）") } } },
+            "キーを入力する" to { val e=EditText(this).apply { hint="AIza…"; isSingleLine=true; inputType=android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD }
+                android.app.AlertDialog.Builder(this).setTitle("Gemini API キー").setMessage("自分の Google AI Studio のキー。この端末の中だけに暗号化して保存します。").setView(FrameLayout(this).apply { setPadding(dp(20),0,dp(20),0); addView(e) })
+                    .setPositiveButton("保存") { _,_ -> ScanAi.setKey(this,e.text.toString()); message("保存しました") }.setNegativeButton("やめる",null).show() })
+        if(has) items+="キーを消す" to { ScanAi.setKey(this,null); message("消しました。スキャンは端末内の読み取りだけになります") }
+        choose("Gemini（${if(has) "キーあり、スキャンのたびに自動で送る" else "キーなし"}）",items.map { it.first }) { items[it].second() }
+    }
+    /** 純正カメラの置き換え：入口ごとの設定と、今どうなっているか */
+    private fun showReplaceGuide() {
+        val cam=Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+        val def=packageManager.resolveActivity(cam,PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName
+        val status=when(def) { packageName -> "既定のカメラ：このアプリ ✓"; null,"android" -> "既定のカメラ：まだ選ばれていない"; else -> "既定のカメラ：${runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(def,0)) }.getOrDefault(def)}" }
+        fun settings(vararg actions:String) { for(a in actions) if(runCatching { startActivity(Intent(a)) }.isSuccess) return; startActivity(Intent(android.provider.Settings.ACTION_SETTINGS)) }
+        val items=listOf<Pair<String,()->Unit>>(
+            "① サイドボタン 2 回押しでこのカメラ" to { android.app.AlertDialog.Builder(this).setTitle("サイドボタン").setMessage("端末の設定 →「便利な機能」→「サイドボタン」→「2 回押し」をオン →「アプリを開く」で Theta Camera Hatch を選びます。").setPositiveButton("設定を開く") { _,_ -> settings("com.samsung.settings.SIDE_KEY_SETTINGS","android.settings.ADVANCED_FEATURES_SETTINGS") }.setNegativeButton("閉じる",null).show() },
+            "② 既定のカメラにする（$status）" to { android.app.AlertDialog.Builder(this).setTitle("既定のカメラ").setMessage("このあと出る選択画面で「Theta Camera Hatch」→「常に」を選びます。選択画面が出ずに純正が開くときは、純正カメラの「既定で開く」をクリアしてからもう一度。").setPositiveButton("選択画面を出す") { _,_ -> runCatching { startActivity(cam) } }
+                .setNeutralButton("純正の既定をクリア") { _,_ -> runCatching { startActivity(Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:com.sec.android.app.camera"))) } }.setNegativeButton("閉じる",null).show() },
+            "③ ロック画面のショートカット" to { android.app.AlertDialog.Builder(this).setTitle("ロック画面").setMessage("端末の設定 →「ロック画面と AOD」→「ショートカット」で、カメラの代わりに Theta Camera Hatch を選びます。ロック中にそのまま撮れるか（解除を求められるか）は端末しだいです。").setPositiveButton("設定を開く") { _,_ -> settings("com.samsung.settings.LOCKSCREEN_SETTINGS","android.settings.SECURITY_SETTINGS") }.setNegativeButton("閉じる",null).show() },
+            "④ ホーム画面にアイコンを置く" to { val sm=getSystemService(android.content.pm.ShortcutManager::class.java)
+                val launch=packageManager.getLaunchIntentForPackage(packageName)
+                if(sm?.isRequestPinShortcutSupported==true && launch!=null) sm.requestPinShortcut(android.content.pm.ShortcutInfo.Builder(this,"camera").setShortLabel("カメラ").setIcon(android.graphics.drawable.Icon.createWithResource(this,R.drawable.ic_launcher)).setIntent(launch.setAction(Intent.ACTION_MAIN)).build(),null)
+                else message("ホーム画面でアイコンを長押しして置いてください") },
+            "⑤ 純正カメラのアイコンを片付ける" to { message("ホーム画面で純正カメラのアイコンを長押し →「削除」（アプリは消えず、アイコンだけ外れます）") })
+        choose("純正カメラの置き換え",items.map { it.first }) { items[it].second() }
+    }
+    private fun saveScan(res:com.google.mlkit.vision.documentscanner.GmsDocumentScanningResult):ScanSaved {
         val base="Scan_"+SimpleDateFormat("yyyyMMdd_HHmmss",Locale.US).format(Date())
         fun copy(src:Uri, collection:Uri, name:String, mime:String, dir:String):Uri? {
             val dst=contentResolver.insert(collection,ContentValues().apply { put(MediaStore.MediaColumns.DISPLAY_NAME,name); put(MediaStore.MediaColumns.MIME_TYPE,mime); put(MediaStore.MediaColumns.RELATIVE_PATH,dir) }) ?: return null
             contentResolver.openInputStream(src)?.use { i -> contentResolver.openOutputStream(dst)?.use { o -> i.copyTo(o) } }
             return dst
         }
-        val pages=res.pages ?: emptyList()
-        var first:Uri?=null
-        pages.forEachIndexed { n,pg -> val u=copy(pg.imageUri,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,"${base}_p${n+1}.jpg","image/jpeg","DCIM/ThetaCamera/Scan"); if(first==null) first=u }
-        res.pdf?.let { copy(it.uri,MediaStore.Files.getContentUri("external"),"$base.pdf","application/pdf","Documents/ThetaCamera") }
-        first?.let { runOnUiThread { saveLast(it,false) } }
-        return pages.size
+        val pages=(res.pages ?: emptyList()).mapIndexedNotNull { n,pg -> copy(pg.imageUri,MediaStore.Images.Media.EXTERNAL_CONTENT_URI,"${base}_p${n+1}.jpg","image/jpeg","DCIM/ThetaCamera/Scan") }
+        val pdf=res.pdf?.let { copy(it.uri,MediaStore.Files.getContentUri("external"),"$base.pdf","application/pdf","Documents/ThetaCamera") }
+        pages.firstOrNull()?.let { runOnUiThread { saveLast(it,false) } }
+        return ScanSaved(base,pages,pdf)
     }
     private fun showUpdateMenu() {
         val auto=prefs.getBoolean("updateAuto",true)
@@ -1315,7 +1370,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 .put("coverPresent",presentStatus.toString()).put("coverLive",coverSession!=null))
             .put("ui",J().put("hud",hudShown).put("voiceShutter",voiceOn).put("saveFolder",saveFolder).put("folders",org.json.JSONArray(folders))
                 .put("event",meta.event(currentEvent)?.let { meta.label(it) } ?: JSONObjectNull).put("lastUri",lastUri?.toString() ?: JSONObjectNull))
-            .put("secureMode",secureMode).put("code",codeValue?.rawValue ?: JSONObjectNull).put("autoCode",autoCode).put("capture",capture?.let { c -> org.json.JSONObject().put("system",sysCapture?.kind ?: JSONObjectNull).put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
+            .put("secureMode",secureMode).put("geminiKey",ScanAi.key(this)!=null).put("code",codeValue?.rawValue ?: JSONObjectNull).put("autoCode",autoCode).put("capture",capture?.let { c -> org.json.JSONObject().put("system",sysCapture?.kind ?: JSONObjectNull).put("source",c.source).put("mode",c.mode).put("modes",org.json.JSONArray(c.modes)).put("multiple",c.multiple).put("scanFormat",c.scanFormat).put("count",captured.size) } ?: JSONObjectNull)
             .put("errors",org.json.JSONArray(recentErrors.toList()))
     }
     private val JSONObjectNull: Any get() = org.json.JSONObject.NULL
@@ -1538,7 +1593,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
                 fun copy(src:Uri,name:String):java.io.File { val f=java.io.File(captureDir(),name); contentResolver.openInputStream(src)?.use { i -> f.outputStream().use { o -> i.copyTo(o) } }; return f }
                 val list=if(c.scanFormat=="images") (res.pages ?: emptyList()).mapIndexed { n,pg -> copy(pg.imageUri,"${base}_p${n+1}.jpg") to "image/jpeg" }
                     else listOfNotNull(res.pdf?.let { copy(it.uri,"$base.pdf") to "application/pdf" })
-                if(captureAlsoSave) runCatching { saveScan(res) }
+                if(captureAlsoSave) runCatching { saveScan(res) }.getOrNull()?.let { sv -> runOnUiThread { titleScan(sv,(res.pages ?: emptyList()).map { it.imageUri }) } }
                 list
             } }
             out.onSuccess { deliver(it) }.onFailure { message("スキャンを受け取れません：${it.message}") }

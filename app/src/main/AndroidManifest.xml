@@ -2,6 +2,8 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- ハブ（Home・KidsHome）の共通設定・Gemini キーを読む（spec/THETA_SHARED_SETTINGS.md §4） -->
+    <uses-permission android:name="app.thetahatch.permission.SHARE" />
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
     <uses-feature android:name="android.hardware.sensor.hinge_angle" android:required="false" />
     <queries>

@@ -24,7 +24,7 @@ class MetaStore(private val context: Context) {
     data class Meta(
         val assetId: String, val uri: String, val name: String, var folder: String,
         var eventId: String?, var favorite: Boolean, val tags: MutableList<String>, var comment: String, val created: Long,
-    ) { var crop: String = "" }
+    ) { var crop: String = ""; var title: String = ""; var ocr: String = ""; var kind: String = ""; var docDate: String = "" }
 
     val events = mutableListOf<Event>()
     private val metas = LinkedHashMap<String, Meta>()
@@ -66,7 +66,7 @@ class MetaStore(private val context: Context) {
         if (query.isBlank()) return true
         if (m == null) return false
         val ev = event(m.eventId)
-        val hay = listOf(m.comment, m.tags.joinToString(" "), ev?.name ?: "", m.folder, m.name).joinToString(" ")
+        val hay = listOf(m.comment, m.tags.joinToString(" "), ev?.name ?: "", m.folder, m.name, m.title, m.kind, m.ocr).joinToString(" ")
         return query.split(' ', '　').filter { it.isNotBlank() }.all { hay.contains(it, ignoreCase = true) }
     }
 
@@ -90,7 +90,8 @@ class MetaStore(private val context: Context) {
             metas.values.forEach { m ->
                 put(JSONObject().put("asset_id", m.assetId).put("uri", m.uri).put("media", m.name).put("folder", m.folder)
                     .put("event_id", m.eventId ?: JSONObject.NULL).put("favorite", m.favorite).put("tags", JSONArray(m.tags))
-                    .put("comment", m.comment).put("created", m.created).put("crop", m.crop))
+                    .put("comment", m.comment).put("created", m.created).put("crop", m.crop)
+                    .put("title", m.title).put("ocr", m.ocr).put("kind", m.kind).put("doc_date", m.docDate))
             }
         })
         runCatching { file.writeText(o.toString()) }
@@ -104,7 +105,7 @@ class MetaStore(private val context: Context) {
                 val tags = j.optJSONArray("tags")?.let { t -> MutableList(t.length()) { t.getString(it) } } ?: mutableListOf()
                 val m = Meta(j.getString("asset_id"), j.getString("uri"), j.getString("media"), j.optString("folder"),
                     if (j.isNull("event_id")) null else j.optString("event_id"), j.optBoolean("favorite"), tags, j.optString("comment"), j.optLong("created"))
-                m.crop = j.optString("crop")
+                m.crop = j.optString("crop"); m.title = j.optString("title"); m.ocr = j.optString("ocr"); m.kind = j.optString("kind"); m.docDate = j.optString("doc_date")
                 metas[m.uri] = m
             }
         }
@@ -121,6 +122,7 @@ class MetaStore(private val context: Context) {
             .put("event", ev?.let { eventJson(it) } ?: JSONObject.NULL)
             .put("favorite", m.favorite).put("rating", if (m.favorite) 1 else 0)
             .put("tags", JSONArray(m.tags)).put("comment", m.comment)
+            .put("title", m.title.ifBlank { JSONObject.NULL }).put("kind", m.kind.ifBlank { JSONObject.NULL }).put("doc_date", m.docDate.ifBlank { JSONObject.NULL }).put("ocr_text", m.ocr.ifBlank { JSONObject.NULL })
             .put("display_crop", if (m.crop.isBlank()) JSONObject.NULL else JSONObject().put("type", "clap-center").put("size", m.crop))
             .put("created", SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US).format(Date(m.created)))
         upsert(dir, "$base.theta.json", "application/json", json.toString(2).toByteArray())
@@ -137,6 +139,7 @@ class MetaStore(private val context: Context) {
             append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">\n <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">\n")
             append("  <rdf:Description rdf:about=\"\" xmlns:xmp=\"http://ns.adobe.com/xap/1.0/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmp:Rating=\"${if (m.favorite) 1 else 0}\">\n")
             if (subjects.isNotEmpty()) append("   <dc:subject><rdf:Bag>${subjects.joinToString("") { "<rdf:li>${esc(it)}</rdf:li>" }}</rdf:Bag></dc:subject>\n")
+            if (m.title.isNotBlank()) append("   <dc:title><rdf:Alt><rdf:li xml:lang=\"x-default\">${esc(m.title)}</rdf:li></rdf:Alt></dc:title>\n")
             if (m.comment.isNotBlank()) append("   <dc:description><rdf:Alt><rdf:li xml:lang=\"x-default\">${esc(m.comment)}</rdf:li></rdf:Alt></dc:description>\n")
             append("  </rdf:Description>\n </rdf:RDF>\n</x:xmpmeta>\n<?xpacket end=\"w\"?>\n")
         }
