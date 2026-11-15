@@ -1227,8 +1227,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         rearRequested=true; selectedId=null; facing=CameraSelector.LENS_FACING_BACK; resetManual(); updateRearUi()
         try {
             areaController?.transferActivityToWindowArea(info.token,this,main,object:WindowAreaSessionCallback {
-                override fun onSessionStarted(session:WindowAreaSession) {rearSession=session;rearRequested=false;pendingAutoRear=false;bindCamera();updateRearUi()}
-                override fun onSessionEnded(t:Throwable?) {rearSession=null;rearRequested=false;pendingAutoRear=false;foldTrigger.reset(); if(t!=null){lastError="外側画面: ${t.message}";message(lastError)};if(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))bindCamera();updateRearUi()}
+                override fun onSessionStarted(session:WindowAreaSession) {rearSession=session;rearRequested=false;pendingAutoRear=false;applyOrientationLock();rotateUi();bindCamera();updateRearUi()}
+                override fun onSessionEnded(t:Throwable?) {rearSession=null;rearRequested=false;pendingAutoRear=false;foldTrigger.reset();applyOrientationLock();rotateUi(); if(t!=null){lastError="外側画面: ${t.message}";message(lastError)};if(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))bindCamera();updateRearUi()}
             })
         } catch(e:Exception) {rearRequested=false;fail("外側画面切替",e);updateRearUi()}
     }
@@ -1659,7 +1659,10 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         showQr(raw, null)
     }
     private fun applyOrientationLock() {
-        requestedOrientation=when { flexLandscape -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        requestedOrientation=when {
+            // 外画面で自撮り中は固定しない（裏返して持つと上下が逆になるため、逆さの縦も含めて端末に合わせて回す）
+            rearSession!=null || rearRequested -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_FULL_SENSOR
+            flexLandscape -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             lockPortrait -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             else -> android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
     }
@@ -1674,7 +1677,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     /** 端末の向きに合わせて、アイコン・数字・サムネイルを起こす */
     private fun rotateUi() {
         if(!::banner.isInitialized) return
-        val target=if(lockPortrait && !flexLandscape) when(deviceAngle) { 90 -> -90f; 180 -> 180f; 270 -> 90f; else -> 0f } else 0f
+        val target=if(lockPortrait && !flexLandscape && rearSession==null && !rearRequested) when(deviceAngle) { 90 -> -90f; 180 -> 180f; 270 -> 90f; else -> 0f } else 0f
         uiAngle=target
         val views=rotatables+(0 until thumbStrip.childCount).map { thumbStrip.getChildAt(it) }
         views.forEach { v -> var d=target-v.rotation; while(d>180) d-=360; while(d<-180) d+=360; v.animate().rotationBy(d).setDuration(220).start() }
