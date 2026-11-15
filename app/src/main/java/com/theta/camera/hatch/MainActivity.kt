@@ -101,6 +101,9 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private var uiAngle = 0f
     private var halfOpen = false
     private var flexLandscape = false
+    private lateinit var zoomBar: ZoomBar
+    private var rearFlip = true   // 外画面で自撮りのとき映像を 180° 回して表示（Fold5 では外画面の映像が上下逆になるため）
+    private val hideZoomBar = Runnable { if(::zoomBar.isInitialized && !hudShown && !zoomBar.dragging) zoomBar.visibility=View.GONE }
     private val recentErrors = ArrayDeque<String>()
     private var burstLimit = 100
     private var burstCrop: String? = null
@@ -230,6 +233,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         autoRear = prefs.getBoolean("autoRear", true)
         lockPortrait = prefs.getBoolean("lockPortrait", true)
+        rearFlip = prefs.getBoolean("rearFlip", true)
         heifClap = prefs.getBoolean("heifClap", true)
         applyOrientationLock()
         highResolution = prefs.getBoolean("highResolution", false)
@@ -380,7 +384,11 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         codeChip=TextView(this).apply { textSize=14f; setTextColor(Color.WHITE); isSingleLine=true; ellipsize=android.text.TextUtils.TruncateAt.END; maxWidth=dp(300)
             background=round(Color.argb(190,0,0,0),20); setPadding(dp(16),dp(10),dp(16),dp(10)); visibility=View.GONE; elevation=dp(4).toFloat()
             setOnClickListener { codeValue?.let { openCode(it) } } }
-        bottomBox=vcol(Gravity.CENTER_HORIZONTAL,codeChip,stripBox,evBar,zoomPill)
+        zoomBar=ZoomBar(this).apply { contentDescription="ズーム（左右になぞる）"; visibility=View.GONE
+            onZoom={ z -> camera?.cameraControl?.setZoomRatio(z); handler.removeCallbacks(hideZoomBar) }
+            onRelease={ handler.removeCallbacks(hideZoomBar); handler.postDelayed(hideZoomBar,2000) } }
+        bottomBox=vcol(Gravity.CENTER_HORIZONTAL,codeChip,stripBox,evBar,zoomBar,zoomPill)
+        (zoomBar.layoutParams as LinearLayout.LayoutParams).apply { width=dp(300); height=dp(56) }
         (codeChip.layoutParams as? LinearLayout.LayoutParams)?.bottomMargin=dp(8)
         ui.addView(bottomBox,at(Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
         lastThumb=ImageView(this).apply { scaleType=ImageView.ScaleType.CENTER_CROP; background=GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(60,0,0,0)); setStroke(dp(2),Color.WHITE) }; clipToOutline=true; setPadding(dp(2),dp(2),dp(2),dp(2)); contentDescription="直前の写真・動画を開く"; setOnClickListener { openLast() } }
@@ -388,7 +396,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         ui.addView(lastThumb,FrameLayout.LayoutParams(dp(46),dp(46),Gravity.BOTTOM or Gravity.START).apply { bottomMargin=dp(20); leftMargin=dp(6) })
         if(capture!=null) buildCaptureUi()
         arrangeUi(); setHud(prefs.getBoolean("hud",false)); setContentView(root); updateThumb()
-        val pinch=ScaleGestureDetector(this,object:ScaleGestureDetector.SimpleOnScaleGestureListener(){ override fun onScale(d:ScaleGestureDetector):Boolean { camera?.cameraInfo?.zoomState?.value?.let { zoomTo(it.zoomRatio*d.scaleFactor) }; return true } })
+        val pinch=ScaleGestureDetector(this,object:ScaleGestureDetector.SimpleOnScaleGestureListener(){ override fun onScale(d:ScaleGestureDetector):Boolean { camera?.cameraInfo?.zoomState?.value?.let { zoomTo(it.zoomRatio*d.scaleFactor) }; zoomBar.visibility=View.VISIBLE; handler.removeCallbacks(hideZoomBar); handler.postDelayed(hideZoomBar,2000); return true } })
         val gestures=GestureDetector(this,object:GestureDetector.SimpleOnGestureListener(){
             override fun onDown(e:MotionEvent)=true
             override fun onSingleTapUp(e:MotionEvent):Boolean { camera?.let { c ->
@@ -403,7 +411,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
     private fun setHud(show:Boolean) {
         hudShown=show; prefs.edit().putBoolean("hud",show).apply()
         val vis=if(show) View.VISIBLE else View.GONE
-        hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; stripBox.visibility=vis; lastThumb.visibility=if(show) View.GONE else View.VISIBLE
+        hudRows.visibility=vis; lensInfo.visibility=vis; coverChip.visibility=vis; settingsChip.visibility=vis; zoomPill.visibility=vis; zoomBar.visibility=vis; stripBox.visibility=vis; lastThumb.visibility=if(show) View.GONE else View.VISIBLE
         if(capture!=null || secureMode) { stripBox.visibility=View.GONE; lastThumb.visibility=View.GONE }
         if(secureMode) settingsChip.visibility=View.GONE
         else if(show) { refreshStrip(); buildFolderRow(); refreshInfoBar() }
@@ -740,6 +748,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         aspectChip.variant=aspect
         val res=imageCapture?.resolutionInfo?.resolution
         lensInfo.text="${lensName(z)} · ${String.format(Locale.US,"%.1f×",z)}${res?.let { "  ·  ${it.width}×${it.height}" } ?: ""}"
+        camera?.cameraInfo?.zoomState?.value?.let { zs -> zoomBar.setRange(zs.minZoomRatio,zs.maxZoomRatio); if(!zoomBar.dragging) zoomBar.value=zs.zoomRatio }
         val near=zoomChips.minByOrNull { abs(it.first-z) }?.first
         zoomChips.forEach { (v,c) -> val on=v==near && facing==CameraSelector.LENS_FACING_BACK
             c.background=if(on) GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(Color.argb(70,0,0,0)); setStroke(dp(1),Color.WHITE) } else null
@@ -963,6 +972,7 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
             "QR・バーコードを自動で読む：${if(autoCode) "ON" else "OFF"}" to { autoCode=!autoCode; prefs.edit().putBoolean("autoCode",autoCode).apply(); handler.removeCallbacks(codeTick); if(autoCode) handler.post(codeTick) else hideCode() },
             "ほかの Hatch に呼ばれたときも自分にも保存：${if(captureAlsoSave) "ON" else "OFF"}" to { captureAlsoSave=!captureAlsoSave; prefs.edit().putBoolean("captureAlsoSave",captureAlsoSave).apply() },
             "外画面ライブにシャッターも出す：${if(coverShutter) "ON" else "OFF"}" to { coverShutter=!coverShutter; prefs.edit().putBoolean("coverShutter",coverShutter).apply(); if(coverSession!=null) { stopCover(); startCover() } },
+            "外画面で自撮りの映像を上下反転：${if(rearFlip) "ON" else "OFF"}" to { rearFlip=!rearFlip; prefs.edit().putBoolean("rearFlip",rearFlip).apply(); if(rearSession!=null) stage.rotation=if(rearFlip) 180f else 0f },
             "開いたら外画面で自撮り：${if(autoRear) "ON" else "OFF"}" to { autoRear=!autoRear; pendingAutoRear=false; prefs.edit().putBoolean("autoRear",autoRear).apply(); updateRearUi() },
             "画面の向き：${if(lockPortrait) "縦に固定（アイコンだけ回る）" else "端末に合わせて回る"}" to { lockPortrait=!lockPortrait; prefs.edit().putBoolean("lockPortrait",lockPortrait).apply(); flexLandscape=false; applyOrientationLock(); rotateUi() },
             "カメラを再接続" to { startProvider() },
@@ -1227,8 +1237,8 @@ class MainActivity : ComponentActivity(), SensorEventListener, app.thetahatch.ad
         rearRequested=true; selectedId=null; facing=CameraSelector.LENS_FACING_BACK; resetManual(); updateRearUi()
         try {
             areaController?.transferActivityToWindowArea(info.token,this,main,object:WindowAreaSessionCallback {
-                override fun onSessionStarted(session:WindowAreaSession) {rearSession=session;rearRequested=false;pendingAutoRear=false;applyOrientationLock();rotateUi();bindCamera();updateRearUi()}
-                override fun onSessionEnded(t:Throwable?) {rearSession=null;rearRequested=false;pendingAutoRear=false;foldTrigger.reset();applyOrientationLock();rotateUi(); if(t!=null){lastError="外側画面: ${t.message}";message(lastError)};if(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))bindCamera();updateRearUi()}
+                override fun onSessionStarted(session:WindowAreaSession) {rearSession=session;rearRequested=false;pendingAutoRear=false;applyOrientationLock();rotateUi();stage.rotation=if(rearFlip) 180f else 0f;bindCamera();updateRearUi()}
+                override fun onSessionEnded(t:Throwable?) {rearSession=null;rearRequested=false;pendingAutoRear=false;foldTrigger.reset();applyOrientationLock();rotateUi();stage.rotation=0f; if(t!=null){lastError="外側画面: ${t.message}";message(lastError)};if(lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))bindCamera();updateRearUi()}
             })
         } catch(e:Exception) {rearRequested=false;fail("外側画面切替",e);updateRearUi()}
     }
@@ -1945,6 +1955,45 @@ class ThumbView(context:Context, private val video:Boolean):ImageView(context) {
         if(video) { p.style=Paint.Style.FILL; p.color=Color.argb(220,255,255,255)
             val cx=width/2f; val cy=height/2f; val r=6*d
             c.drawPath(Path().apply { moveTo(cx-r*0.6f,cy-r); lineTo(cx+r,cy); lineTo(cx-r*0.6f,cy+r); close() },p) }
+    }
+}
+
+/** なめらかなズームバー：左右になぞって連続で倍率を変える。目盛りは対数（低倍率も細かく）。0.6・1・3 などで軽く振動 */
+class ZoomBar(context:Context):View(context) {
+    var onZoom:(Float)->Unit={}
+    var onRelease:()->Unit={}
+    var dragging=false; private set
+    private var min=1f; private var max=10f
+    var value=1f; set(v) { field=v.coerceIn(min,max); invalidate() }
+    private val d=resources.displayMetrics.density
+    private val p=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.WHITE; strokeCap=Paint.Cap.ROUND; setShadowLayer(2.5f*d,0f,0.5f*d,Color.argb(160,0,0,0)) }
+    private val t=Paint(Paint.ANTI_ALIAS_FLAG).apply { color=Color.WHITE; textAlign=Paint.Align.CENTER; typeface=Typeface.DEFAULT_BOLD; setShadowLayer(2.5f*d,0f,0.5f*d,Color.argb(160,0,0,0)) }
+    private var lastTick=-1f
+    init { isClickable=true; isFocusable=true }
+    fun setRange(a:Float,b:Float) { if(a!=min || b!=max) { min=a; max=maxOf(b,a+0.01f); invalidate() } }
+    private val pad get()=14*d
+    private fun pos(z:Float)=(ln(z/min)/ln(max/min)).coerceIn(0f,1f)
+    private fun xOf(z:Float)=pad+pos(z)*(width-2*pad)
+    private fun zOf(x:Float)=min*exp(((x-pad)/(width-2*pad)).coerceIn(0f,1f)*ln(max/min))
+    private fun ticks()=listOf(0.6f,1f,2f,3f,5f,10f,20f,30f).filter { it>=min-0.01f && it<=max+0.01f }
+    override fun onDraw(c:Canvas) {
+        val y=height*0.62f
+        p.strokeWidth=1.5f*d; p.alpha=150; c.drawLine(pad,y,width-pad,y,p)
+        t.textSize=9*d
+        for(k in ticks()) { val x=xOf(k); p.alpha=230; p.strokeWidth=1.5f*d; c.drawLine(x,y-5*d,x,y+5*d,p); t.alpha=200; c.drawText(if(k<1) "0.6" else k.toInt().toString(),x,y+16*d,t) }
+        val x=xOf(value); p.alpha=255; c.drawCircle(x,y,7*d,p)
+        t.textSize=12*d; t.alpha=255; c.drawText(String.format(Locale.US,"%.1f×",value),x,y-12*d,t)
+    }
+    override fun onTouchEvent(e:MotionEvent):Boolean {
+        when(e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> { dragging=true; parent?.requestDisallowInterceptTouchEvent(true) }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { dragging=false; onRelease(); return true }
+        }
+        val z=zOf(e.x); value=z; onZoom(z)
+        // 目盛りを通り過ぎたら軽く振動
+        val near=ticks().firstOrNull { abs(xOf(it)-e.x)<3*d }
+        if(near!=null && near!=lastTick) { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); lastTick=near } else if(near==null) lastTick=-1f
+        return true
     }
 }
 

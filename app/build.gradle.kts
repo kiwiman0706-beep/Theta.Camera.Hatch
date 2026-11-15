@@ -13,8 +13,8 @@ android {
         applicationId = "app.thetahatch.camera"
         minSdk = 29
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.16.1"
+        versionCode = 22
+        versionName = "0.17.0"
     }
     buildFeatures { buildConfig = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
